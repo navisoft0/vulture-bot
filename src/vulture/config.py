@@ -67,6 +67,13 @@ BATCH_SCORING = os.getenv("BATCH_SCORING", "true").lower() in ("1", "true", "yes
 #: Max seconds to wait for a scoring batch before abandoning the run's scores.
 BATCH_TIMEOUT_S = int(os.getenv("BATCH_TIMEOUT_S", "1800"))
 
+#: Daemon mode: minutes between scans.
+SCAN_INTERVAL_MIN = int(os.getenv("SCAN_INTERVAL_MIN", "45"))
+
+#: Daemon mode: UTC hour after which the daily Cramer run fires (Mad Money
+#: recaps land in the evening US/Eastern).
+CRAMER_HOUR_UTC = int(os.getenv("CRAMER_HOUR_UTC", "23"))
+
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "data")
 
 # Google Sheets worksheet (tab) names.
@@ -94,6 +101,8 @@ _REQUIRED = {
         "DISCORD_WEBHOOK_NEWS",
     ],
 }
+# Daemon runs scans (required) and Cramer (skipped if its webhook is unset).
+_REQUIRED["daemon"] = _REQUIRED["scan"]
 
 # Optional but used when present.
 OPTIONAL_VARS = [

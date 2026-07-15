@@ -12,8 +12,9 @@ def main() -> int:
         description="Vulture: options-focused trending-stock scanner.",
     )
     parser.add_argument(
-        "command", choices=["scan", "cramer"],
-        help="scan: Reddit/Stocktwits -> score -> Discord. cramer: Mad Money recap digest.",
+        "command", choices=["scan", "cramer", "daemon"],
+        help="scan: one pipeline run. cramer: one Mad Money digest run. "
+             "daemon: long-running loop (scan every SCAN_INTERVAL_MIN, Cramer daily).",
     )
     args = parser.parse_args()
 
@@ -33,9 +34,12 @@ def main() -> int:
     if args.command == "scan":
         from .pipeline import run_scan
         run_scan()
-    else:
+    elif args.command == "cramer":
         from .trackers.cramer import run_cramer_tracker
         run_cramer_tracker()
+    else:
+        from .daemon import run_daemon
+        run_daemon()
     return 0
 
 

@@ -17,11 +17,29 @@ cp vulture_cred.env.example vulture_cred.env   # fill in credentials
 ## Run
 
 ```bash
-vulture scan     # main pipeline (cron this; e.g. every 30-60 min)
-vulture cramer   # Cramer Watch digest from CNBC Mad Money recaps (e.g. daily)
+vulture scan     # one pipeline run (for external cron)
+vulture cramer   # one Cramer Watch digest run (for external cron)
+vulture daemon   # long-running loop: scan every SCAN_INTERVAL_MIN (45),
+                 # Cramer once daily after CRAMER_HOUR_UTC (23)
 
 # without installing: PYTHONPATH=src python -m vulture scan
 ```
+
+## Hosting on Railway
+
+`railway.json` sets the start command to `PYTHONPATH=src python -m vulture daemon`,
+so a plain deploy of this repo runs as a single always-on worker. Two things:
+
+1. **Set `STATE_BACKEND=sheet`** (and add a "Processed" tab to the spreadsheet) —
+   Railway's filesystem is ephemeral, so file-based state re-posts old plays
+   after every redeploy.
+2. Set all variables from `vulture_cred.env.example` in the Railway service's
+   Variables tab (the env file itself is only for local runs).
+
+Alternative: prefer Railway's cron jobs over an always-on worker by creating
+two services from this repo with cron schedules and start commands
+`PYTHONPATH=src python -m vulture scan` (e.g. `*/45 * * * *`) and
+`... cramer` (e.g. `0 23 * * *`), which bills only while runs execute.
 
 ## Cost controls (Anthropic API)
 
