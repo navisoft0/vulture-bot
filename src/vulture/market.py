@@ -35,7 +35,7 @@ class MarketData:
     # Throttle + cache plumbing
     # ------------------------------------------------------------------
 
-    def _call(self, cache_key: tuple | None, fn, *args, **kwargs):
+    def _call(self, cache_key: tuple | None, fn, *args, not_found_ok=False, **kwargs):
         if cache_key is not None:
             key = cache_key + (date.today().isoformat(),)
             if key in self._cache:
@@ -48,7 +48,12 @@ class MarketData:
         try:
             result = fn(*args, **kwargs)
         except Exception as e:
-            log.warning("Massive call %s failed: %s", getattr(fn, "__name__", fn), e)
+            # A 404 on a lookup we *expect* to miss (candidate-ticker validation)
+            # is a designed-for outcome, not an error worth a WARNING.
+            if not_found_ok and "NOT_FOUND" in str(e):
+                log.debug("Massive: %s -> not found (expected for junk candidates).", cache_key)
+            else:
+                log.warning("Massive call %s failed: %s", getattr(fn, "__name__", fn), e)
             result = None
         if cache_key is not None:
             self._cache[key] = result
@@ -60,7 +65,8 @@ class MarketData:
 
     def validate_ticker(self, symbol: str) -> dict | None:
         """Ticker details if `symbol` is a real listed ticker, else None."""
-        details = self._call(("details", symbol), self._client.get_ticker_details, symbol)
+        details = self._call(("details", symbol), self._client.get_ticker_details, symbol,
+                             not_found_ok=True)
         if details is None:
             return None
         return {

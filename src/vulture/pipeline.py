@@ -160,6 +160,13 @@ def run_scan() -> None:
             "post": post, "enriched_sym": enriched_sym, "bar": bar, "rsi": rsi_val,
         }
 
+    enriched_count = sum(1 for c in context.values() if c["enriched_sym"])
+    log.info(
+        "Enrichment done: %d/%d posts had ticker candidates; %d validated against "
+        "Massive (the rest score without market data; junk candidates pruned).",
+        len(jobs), len(posts), enriched_count,
+    )
+
     # Phase 2: score (Batches API when enabled — 50% cheaper; sync fallback).
     results = analysis.score_many(jobs)
 
