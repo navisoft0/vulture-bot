@@ -2,3 +2,5 @@ __pycache__/
 .env
 cache.json
 data/
+vulture_cred.env
+*.egg-info/
