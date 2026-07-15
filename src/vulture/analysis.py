@@ -1,14 +1,23 @@
 """Claude-powered analysis: candidate scoring and Cramer-recap extraction.
 
-All calls use structured outputs (`client.messages.parse` + Pydantic), so
-malformed responses raise instead of silently corrupting the pipeline.
+Cost posture:
+- Scoring goes through the Message Batches API by default (50% cheaper than
+  synchronous calls; a cron scan doesn't care about the added minutes), with
+  a synchronous fallback if batch submission fails.
+- Structured outputs everywhere (raw JSON-schema `output_config.format`, with
+  Pydantic validation on our side), so malformed responses are impossible to
+  mistake for data.
+- Model and effort are env-tunable (CLAUDE_MODEL / CLAUDE_EFFORT); Cramer
+  extraction defaults to Haiku (CRAMER_MODEL) — it's mechanical extraction.
 """
 
+import json
 import logging
+import time
 from typing import Literal, Optional
 
 import anthropic
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from . import clients, config
 
@@ -46,6 +55,55 @@ class CramerMention(BaseModel):
 
 class CramerExtraction(BaseModel):
     mentions: list[CramerMention]
+
+
+# ---------------------------------------------------------------------------
+# JSON-schema plumbing for structured outputs
+# ---------------------------------------------------------------------------
+
+#: Constraint keywords the structured-outputs API rejects; Pydantic still
+#: enforces them client-side at validation time.
+_UNSUPPORTED_KEYS = {
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+    "minLength", "maxLength", "minItems", "maxItems", "multipleOf",
+}
+
+
+def _clean_schema(node):
+    if isinstance(node, dict):
+        cleaned = {k: _clean_schema(v) for k, v in node.items() if k not in _UNSUPPORTED_KEYS}
+        if cleaned.get("type") == "object":
+            cleaned["additionalProperties"] = False
+        return cleaned
+    if isinstance(node, list):
+        return [_clean_schema(x) for x in node]
+    return node
+
+
+_TICKER_SCORE_SCHEMA = _clean_schema(TickerScore.model_json_schema())
+
+
+def _output_config() -> dict:
+    cfg = {"format": {"type": "json_schema", "schema": _TICKER_SCORE_SCHEMA}}
+    if config.CLAUDE_EFFORT:
+        cfg["effort"] = config.CLAUDE_EFFORT
+    return cfg
+
+
+def _parse_score(message, label: str) -> TickerScore | None:
+    """Validate a scoring response message into a TickerScore."""
+    if message.stop_reason == "refusal":
+        log.warning("Claude refused to score %s.", label)
+        return None
+    if message.stop_reason == "max_tokens":
+        log.warning("Scoring %s hit max_tokens; discarding truncated output.", label)
+        return None
+    text = next((b.text for b in message.content if b.type == "text"), "")
+    try:
+        return TickerScore.model_validate_json(text)
+    except ValidationError as e:
+        log.warning("Invalid scoring output for %s: %s", label, e)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -98,9 +156,8 @@ Rules:
 """
 
 
-def score_candidate(post: dict, comments: str, market_block: str | None,
-                    stocktwits_block: str | None, today: str) -> TickerScore | None:
-    """One structured scoring call. Returns None on API failure."""
+def build_scoring_prompt(post: dict, comments: str, market_block: str | None,
+                         stocktwits_block: str | None, today: str) -> str:
     sections = [
         f"Current date: {today}",
         f"**Post title:** {post['title']}",
@@ -111,28 +168,94 @@ def score_candidate(post: dict, comments: str, market_block: str | None,
                     else "**Market data:** none supplied")
     if stocktwits_block:
         sections.append(f"**Stocktwits:**\n{stocktwits_block}")
+    return "\n\n".join(sections)
 
-    try:
-        response = clients.anthropic_client().messages.parse(
-            model=config.CLAUDE_MODEL,
-            max_tokens=2500,
-            system=SCORING_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": "\n\n".join(sections)}],
-            output_format=TickerScore,
-        )
-        if response.stop_reason == "refusal":
-            log.warning("Claude refused to score post %s.", post["id"])
-            return None
-        return response.parsed_output
-    except anthropic.RateLimitError as e:
-        log.warning("Anthropic rate limit scoring post %s: %s", post["id"], e)
-    except anthropic.APIStatusError as e:
-        log.error("Anthropic API error (%s) scoring post %s: %s", e.status_code, post["id"], e.message)
-    except anthropic.APIConnectionError as e:
-        log.error("Network error scoring post %s: %s", post["id"], e)
-    except Exception as e:
-        log.error("Unexpected error scoring post %s: %s", post["id"], e)
-    return None
+
+def _request_params(prompt: str) -> dict:
+    return {
+        "model": config.CLAUDE_MODEL,
+        "max_tokens": 2500,
+        "system": SCORING_SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": prompt}],
+        "output_config": _output_config(),
+    }
+
+
+def _score_sync(jobs: list[dict]) -> dict[str, TickerScore]:
+    out: dict[str, TickerScore] = {}
+    client = clients.anthropic_client()
+    for job in jobs:
+        try:
+            message = client.messages.create(**_request_params(job["prompt"]))
+        except anthropic.RateLimitError as e:
+            log.warning("Anthropic rate limit on %s: %s", job["id"], e)
+            continue
+        except anthropic.APIStatusError as e:
+            log.error("Anthropic API error (%s) on %s: %s", e.status_code, job["id"], e.message)
+            continue
+        except anthropic.APIConnectionError as e:
+            log.error("Network error scoring %s: %s", job["id"], e)
+            continue
+        ts = _parse_score(message, job["id"])
+        if ts:
+            out[job["id"]] = ts
+    return out
+
+
+def _score_batch(jobs: list[dict]) -> dict[str, TickerScore]:
+    """Score via the Message Batches API (50% cheaper). Raises on submission
+    failure so the caller can fall back to sync."""
+    from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+    from anthropic.types.messages.batch_create_params import Request
+
+    client = clients.anthropic_client()
+    batch = client.messages.batches.create(requests=[
+        Request(custom_id=job["id"], params=MessageCreateParamsNonStreaming(**_request_params(job["prompt"])))
+        for job in jobs
+    ])
+    log.info("Submitted scoring batch %s (%d requests).", batch.id, len(jobs))
+
+    deadline = time.monotonic() + config.BATCH_TIMEOUT_S
+    while True:
+        batch = client.messages.batches.retrieve(batch.id)
+        if batch.processing_status == "ended":
+            break
+        if time.monotonic() > deadline:
+            log.error("Scoring batch %s timed out after %ds; canceling. "
+                      "This run's unscored posts are skipped.", batch.id, config.BATCH_TIMEOUT_S)
+            try:
+                client.messages.batches.cancel(batch.id)
+            except anthropic.APIError:
+                pass
+            return {}
+        time.sleep(15)
+
+    out: dict[str, TickerScore] = {}
+    for result in client.messages.batches.results(batch.id):
+        if result.result.type == "succeeded":
+            ts = _parse_score(result.result.message, result.custom_id)
+            if ts:
+                out[result.custom_id] = ts
+        else:
+            log.warning("Batch item %s: %s", result.custom_id, result.result.type)
+    log.info("Batch %s complete: %d/%d scored.", batch.id, len(out), len(jobs))
+    return out
+
+
+def score_many(jobs: list[dict]) -> dict[str, TickerScore]:
+    """Score jobs [{"id": ..., "prompt": ...}] -> {id: TickerScore}.
+
+    Uses the Batches API when enabled and there's more than one job; falls
+    back to synchronous scoring if batch submission fails.
+    """
+    if not jobs:
+        return {}
+    if config.BATCH_SCORING and len(jobs) > 1:
+        try:
+            return _score_batch(jobs)
+        except anthropic.APIError as e:
+            log.warning("Batch submission failed (%s); falling back to sync scoring.", e)
+    return _score_sync(jobs)
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +276,7 @@ article contains no Cramer stock calls, return an empty list.
 def extract_cramer_mentions(article_text: str) -> list[CramerMention]:
     try:
         response = clients.anthropic_client().messages.parse(
-            model=config.CLAUDE_MODEL,
+            model=config.CRAMER_MODEL,
             max_tokens=2000,
             system=CRAMER_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": article_text[:12000]}],

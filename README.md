@@ -23,6 +23,23 @@ vulture cramer   # Cramer Watch digest from CNBC Mad Money recaps (e.g. daily)
 # without installing: PYTHONPATH=src python -m vulture scan
 ```
 
+## Cost controls (Anthropic API)
+
+- **Batch scoring is on by default** (`BATCH_SCORING=true`): all scoring calls
+  go through the Message Batches API at 50% of standard token prices, with a
+  synchronous fallback if submission fails. A scan waits (up to
+  `BATCH_TIMEOUT_S`) for results — fine for cron.
+- **Model tier** is one env var: `VULTURE_MODEL=claude-sonnet-5` is ~60%
+  cheaper than the default Opus, `claude-haiku-4-5` ~80% cheaper. If you use
+  sonnet-5, also set `VULTURE_EFFORT=low` (its thinking is on by default).
+- Cramer extraction runs on Haiku by default (`VULTURE_CRAMER_MODEL`).
+- Structural guards: posts with no ticker candidates never reach Claude,
+  `MAX_POSTS_PER_SCAN` caps each run, processed-post state prevents rescoring,
+  and post/comment text is truncated before prompting.
+- Prompt caching is deliberately not used: the shared prefix (the system
+  prompt) is far below the model's minimum cacheable size, and everything
+  after it is unique per post.
+
 ## Notes
 
 - **Data freshness:** Massive's free tier is end-of-day — during market hours

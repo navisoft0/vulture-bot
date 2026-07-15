@@ -47,8 +47,25 @@ STOCKTWITS_ENABLED = os.getenv("STOCKTWITS_ENABLED", "true").lower() in ("1", "t
 #: Processed-post state backend: "file" or "sheet".
 STATE_BACKEND = os.getenv("STATE_BACKEND", "file")
 
-#: Claude model used for scoring and extraction.
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-8")
+#: Claude model used for scoring. (VULTURE_ prefix: bare CLAUDE_* names
+#: collide with Claude Code harness variables in some environments.)
+CLAUDE_MODEL = os.getenv("VULTURE_MODEL", "claude-opus-4-8")
+
+#: Claude model for Cramer recap extraction (mechanical task; Haiku is 5x
+#: cheaper than Opus and sufficient — set VULTURE_CRAMER_MODEL to revert).
+CRAMER_MODEL = os.getenv("VULTURE_CRAMER_MODEL", "claude-haiku-4-5")
+
+#: Optional effort level (low|medium|high|xhigh|max). Unset = model default.
+#: Mostly relevant if VULTURE_MODEL is switched to a model with thinking on by
+#: default (e.g. claude-sonnet-5): VULTURE_EFFORT=low reins in thinking spend.
+CLAUDE_EFFORT = os.getenv("VULTURE_EFFORT") or None
+
+#: Score via the Message Batches API (50% cheaper; adds minutes of latency —
+#: fine for a cron job). Falls back to synchronous scoring on batch failure.
+BATCH_SCORING = os.getenv("BATCH_SCORING", "true").lower() in ("1", "true", "yes")
+
+#: Max seconds to wait for a scoring batch before abandoning the run's scores.
+BATCH_TIMEOUT_S = int(os.getenv("BATCH_TIMEOUT_S", "1800"))
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "data")
 

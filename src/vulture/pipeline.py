@@ -117,9 +117,11 @@ def run_scan() -> None:
     market = clients.market_client()
     st_stats_cache: dict[str, dict | None] = {}
 
-    scored: list[ScoredCandidate] = []
     newly_processed: list[str] = []
 
+    # Phase 1: enrich and build scoring jobs (Reddit + Massive bound).
+    jobs: list[dict] = []
+    context: dict[str, dict] = {}  # post_id -> {post, enriched_sym, bar, rsi}
     for post in posts:
         newly_processed.append(post["id"])
 
@@ -145,7 +147,7 @@ def run_scan() -> None:
                 st_stats_cache[enriched_sym] = stocktwits.symbol_stats(enriched_sym)
 
         comments = reddit.get_comments(post["id"])
-        ts = analysis.score_candidate(
+        prompt = analysis.build_scoring_prompt(
             post, comments,
             market_block=_market_block(company, bar, rsi_val, news, market),
             stocktwits_block=_stocktwits_block(
@@ -153,17 +155,29 @@ def run_scan() -> None:
             ) if enriched_sym else None,
             today=today,
         )
-        if ts is None or ts.ticker in ("N/A", ""):
-            continue
+        jobs.append({"id": post["id"], "prompt": prompt})
+        context[post["id"]] = {
+            "post": post, "enriched_sym": enriched_sym, "bar": bar, "rsi": rsi_val,
+        }
 
+    # Phase 2: score (Batches API when enabled — 50% cheaper; sync fallback).
+    results = analysis.score_many(jobs)
+
+    # Phase 3: post-process scores.
+    scored: list[ScoredCandidate] = []
+    for post_id, ts in results.items():
+        if ts.ticker in ("N/A", ""):
+            continue
+        ctx = context[post_id]
         _check_contracts(ts, market)
         cross = ts.ticker in trending
         comp = scoring.composite(ts, cross_platform=cross)
         scored.append(ScoredCandidate(
-            post=post, score=ts, composite=comp, cross_platform=cross,
-            market_line=market.market_line(bar, rsi_val) if enriched_sym == ts.ticker else None,
+            post=ctx["post"], score=ts, composite=comp, cross_platform=cross,
+            market_line=market.market_line(ctx["bar"], ctx["rsi"])
+            if ctx["enriched_sym"] == ts.ticker else None,
         ))
-        log.info("Scored %s at %.2f (post %s).", ts.ticker, comp, post["id"])
+        log.info("Scored %s at %.2f (post %s).", ts.ticker, comp, post_id)
 
     # One post per ticker per run: keep the highest composite.
     best: dict[str, ScoredCandidate] = {}
