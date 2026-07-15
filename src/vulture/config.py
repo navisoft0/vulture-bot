@@ -1,0 +1,127 @@
+"""Environment loading, validation, and tunables.
+
+Nothing here talks to the network. Import has no side effects beyond
+reading `vulture_cred.env` into the process environment if present.
+"""
+
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv("vulture_cred.env")
+
+# ---------------------------------------------------------------------------
+# Tunables (env-overridable)
+# ---------------------------------------------------------------------------
+
+TARGET_SUBREDDITS = [
+    s.strip()
+    for s in os.getenv(
+        "TARGET_SUBREDDITS",
+        "wallstreetbets,shortsqueeze,WallStreetbetsELITE,smallstreetbets",
+    ).split(",")
+    if s.strip()
+]
+
+#: Composite score a candidate must reach to be posted to Discord.
+POST_THRESHOLD = float(os.getenv("POST_THRESHOLD", "7.0"))
+
+#: Composite score at/above which the "high" forum tag is applied.
+HIGH_TAG_THRESHOLD = float(os.getenv("HIGH_TAG_THRESHOLD", "8.5"))
+
+#: Medium tag band lower bound (between POST_THRESHOLD and HIGH_TAG_THRESHOLD).
+MEDIUM_TAG_THRESHOLD = float(os.getenv("MEDIUM_TAG_THRESHOLD", "7.5"))
+
+#: Maximum posts per scan sent to Claude (cost guard).
+MAX_POSTS_PER_SCAN = int(os.getenv("MAX_POSTS_PER_SCAN", "40"))
+
+#: Maximum age of a Reddit post to consider, in days.
+MAX_POST_AGE_DAYS = int(os.getenv("MAX_POST_AGE_DAYS", "2"))
+
+#: Number of top comments fetched per post.
+COMMENTS_PER_POST = int(os.getenv("COMMENTS_PER_POST", "25"))
+
+#: Enable the best-effort Stocktwits signal.
+STOCKTWITS_ENABLED = os.getenv("STOCKTWITS_ENABLED", "true").lower() in ("1", "true", "yes")
+
+#: Processed-post state backend: "file" or "sheet".
+STATE_BACKEND = os.getenv("STATE_BACKEND", "file")
+
+#: Claude model used for scoring. (VULTURE_ prefix: bare CLAUDE_* names
+#: collide with Claude Code harness variables in some environments.)
+CLAUDE_MODEL = os.getenv("VULTURE_MODEL", "claude-opus-4-8")
+
+#: Claude model for Cramer recap extraction (mechanical task; Haiku is 5x
+#: cheaper than Opus and sufficient — set VULTURE_CRAMER_MODEL to revert).
+CRAMER_MODEL = os.getenv("VULTURE_CRAMER_MODEL", "claude-haiku-4-5")
+
+#: Optional effort level (low|medium|high|xhigh|max). Unset = model default.
+#: Mostly relevant if VULTURE_MODEL is switched to a model with thinking on by
+#: default (e.g. claude-sonnet-5): VULTURE_EFFORT=low reins in thinking spend.
+CLAUDE_EFFORT = os.getenv("VULTURE_EFFORT") or None
+
+#: Score via the Message Batches API (50% cheaper; adds minutes of latency —
+#: fine for a cron job). Falls back to synchronous scoring on batch failure.
+BATCH_SCORING = os.getenv("BATCH_SCORING", "true").lower() in ("1", "true", "yes")
+
+#: Max seconds to wait for a scoring batch before abandoning the run's scores.
+BATCH_TIMEOUT_S = int(os.getenv("BATCH_TIMEOUT_S", "1800"))
+
+#: Daemon mode: minutes between scans.
+SCAN_INTERVAL_MIN = int(os.getenv("SCAN_INTERVAL_MIN", "45"))
+
+#: Daemon mode: UTC hour after which the daily Cramer run fires (Mad Money
+#: recaps land in the evening US/Eastern).
+CRAMER_HOUR_UTC = int(os.getenv("CRAMER_HOUR_UTC", "23"))
+
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "data")
+
+# Google Sheets worksheet (tab) names.
+SHEET_SCORED_TAB = os.getenv("SHEET_SCORED_TAB", "Vulture Data")
+SHEET_PROCESSED_TAB = os.getenv("SHEET_PROCESSED_TAB", "Processed")
+SHEET_CRAMER_TAB = os.getenv("SHEET_CRAMER_TAB", "Cramer Watch")
+
+# ---------------------------------------------------------------------------
+# Required environment variables, per command
+# ---------------------------------------------------------------------------
+
+_REQUIRED = {
+    "scan": [
+        "ANTHROPIC_API_KEY",
+        "MASSIVE_API_KEY",
+        "CLIENT_ID",
+        "CLIENT_SECRET",
+        "USER_AGENT",
+        "DISCORD_WEBHOOK_FORUM",
+        "GOOGLE_CREDENTIALS_JSON",
+        "GOOGLE_SHEET_NAME",
+    ],
+    "cramer": [
+        "ANTHROPIC_API_KEY",
+        "DISCORD_WEBHOOK_NEWS",
+    ],
+}
+# Daemon runs scans (required) and Cramer (skipped if its webhook is unset).
+_REQUIRED["daemon"] = _REQUIRED["scan"]
+
+# Optional but used when present.
+OPTIONAL_VARS = [
+    "DISCORD_TAG_ID_LOW",
+    "DISCORD_TAG_ID_MEDIUM",
+    "DISCORD_TAG_ID_HIGH",
+    "DISCORD_WEBHOOK_NEWS",
+]
+
+
+def validate_env(command: str) -> None:
+    """Raise ValueError listing every missing required variable for `command`."""
+    required = _REQUIRED.get(command, [])
+    missing = [v for v in required if not os.getenv(v)]
+    if missing:
+        raise ValueError(
+            f"Missing required environment variables for '{command}': {', '.join(missing)}"
+        )
+
+
+def get(name: str, default: str | None = None) -> str | None:
+    return os.getenv(name, default)
