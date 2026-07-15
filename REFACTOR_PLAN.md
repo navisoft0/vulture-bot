@@ -38,9 +38,9 @@ Preserved: the scan pipeline shape, praw scraping, pandas rank/dedupe, Google Sh
                                  ▼
                  ┌─ ENRICHMENT (Massive, cached) ─────────┐
                  │ ticker validation (Ticker Overview)     │
-                 │ prev-day bar, RSI/SMA (EOD)             │
-                 │ ticker news (last 48h)                  │
-                 │ options chain snapshot (EOD)            │
+                 │ prev-day bar, RSI/SMA (prev session)    │
+                 │ ticker news (last 48h, hourly feed)     │
+                 │ options contract existence check        │
                  └───────────────┬─────────────────────────┘
                                  ▼
                  ┌─ SCORING (Claude, structured output) ──┐
@@ -104,19 +104,23 @@ Design rules, since this is undocumented and can break or throttle at any time:
 
 ## 4. Enrichment — Massive Free Tier
 
-Both **Stocks Basic** and **Options Basic** free plans exist: 5 API calls/min each, end-of-day data, 2 years history. Options Basic covers all US options tickers with contracts reference, aggregates, and snapshots; **real-time greeks/IV/open interest/trades are paid-only** — at EOD granularity we get chain pricing and volume, which is enough for "is there unusual positioning" context, not for live flow. Client: `pip install massive`.
+Free **Basic** plan: 5 API calls/min, 2 years history, full endpoint surface. Client: `pip install massive`.
 
-Per-candidate enrichment budget (all cached by `(endpoint, ticker, date)` since data is EOD):
+**What "end-of-day" means:** it's a *freshness* limit, not a coverage limit. Price data for the current session becomes available only after market close — so a scan running during market hours sees **the previous session's close** as its freshest price/volume/RSI. Two exceptions are not EOD-bound: **reference data** (ticker details, options contract listings) and the **news endpoint, which updates hourly** on the free plan. Consequence: embeds must label price context as "prev close," never "live."
 
-| Call | Endpoint | Feeds |
-|---|---|---|
-| Validate ticker | Ticker Overview | Kills hallucinated tickers before scoring; company name for embeds |
-| Price/volume | Previous Day Bar | Technical sub-score input + embed context line |
-| Momentum | RSI (and/or SMA) | Technical sub-score input |
-| Catalyst check | Ticker News (filtered to last 48h) | News sub-score input — headlines go into the Claude prompt |
-| Options context | Option Chain Snapshot (EOD) | Options sub-score input: volume concentration by expiry/strike, put/call volume skew, where the discussed strikes sit vs. the chain |
+**Options data is deliberately minimal.** The plays themselves (calls/puts, strikes, expiries) come from what Redditors *say* — pure Claude text extraction, no market-data entitlement needed. The user does their own research from there. The only options endpoint used is the free **contracts reference** (Options Basic plan), for a cheap existence check: if a hyped "$150c Aug 21" doesn't correspond to a listed contract, that's a red flag. No chain pricing, greeks, or flow analysis.
 
-≈ 5 calls per new ticker per day. A scan surfacing 8 unique candidates ≈ 40 calls ≈ 8–9 minutes of rate-limit budget — fine for a cron job, and the throttle sleeps overlap with Claude calls. `market.py` owns a single lock-guarded throttle (~13s between calls) + per-day cache, exactly as sketched in v1 §4.3.
+Per-candidate enrichment budget (all cached by `(endpoint, ticker, date)`):
+
+| Call | Endpoint | Freshness | Feeds |
+|---|---|---|---|
+| Validate ticker | Ticker Overview | reference | Kills hallucinated tickers before scoring; company name for embeds |
+| Price/volume | Previous Day Bar | prev session | Technical sub-score input + embed context line |
+| Momentum | RSI (and/or SMA) | prev session | Technical sub-score input |
+| Catalyst check | Ticker News (last 48h) | hourly | News sub-score input — headlines go into the Claude prompt |
+| Contract check (optional) | All Contracts (options reference) | reference | Red-flag if a discussed strike/expiry isn't a listed contract |
+
+≈ 4–5 calls per new ticker per day. A scan surfacing 8 unique candidates ≈ 35–40 calls ≈ 8 minutes of rate-limit budget — fine for a cron job, and the throttle sleeps overlap with Claude calls. `market.py` owns a single lock-guarded throttle (~13s between calls) + per-day cache.
 
 ---
 
@@ -140,7 +144,6 @@ class TickerScore(BaseModel):
     community_conviction: float  # 0-10: comment validation vs. being torn apart
     news_catalyst: float         # 0-10: do the last-48h headlines support a near-term move?
     technical_setup: float       # 0-10: momentum/level context from bar + RSI data provided
-    options_context: float       # 0-10: does EOD chain volume/skew corroborate the direction?
     plays_discussed: list[OptionPlay]
     briefing: str                # synthesized thesis + community reaction
     red_flags: list[str]         # pump patterns, illiquid chain, stale thesis, etc.
@@ -152,11 +155,10 @@ One `client.messages.parse()` call per candidate on **`claude-opus-4-8`**, with 
 
 ```python
 WEIGHTS = {           # config-tunable
-    "thesis_quality": 0.25,
-    "community_conviction": 0.20,
-    "news_catalyst": 0.20,
-    "technical_setup": 0.15,
-    "options_context": 0.20,
+    "thesis_quality": 0.30,
+    "community_conviction": 0.25,
+    "news_catalyst": 0.25,
+    "technical_setup": 0.20,
 }
 CROSS_PLATFORM_BONUS = 0.5   # ticker also trending on Stocktwits
 RED_FLAG_PENALTY = 0.75      # per flag, capped
@@ -181,8 +183,8 @@ Starting weights are a proposal — the Sheet log of every scored candidate (pos
 - Thread name: `{TICKER} | {composite:.1f} | {emoji}` (existing convention, now a meaningful score).
 - Embed fields:
   - **The Plays** — rendered from `plays_discussed`: `📈 Calls $150 · Aug 21 — "IV still cheap ahead of product event"` (one line per play)
-  - **Score breakdown** — `Thesis 8 · Community 7 · News 8 · Technicals 6 · Options 7`
-  - **Market context** — `Prev close $142.10 (+3.2%) · Vol 18M · RSI 68 · EOD data`
+  - **Score breakdown** — `Thesis 8 · Community 7 · News 8 · Technicals 6`
+  - **Market context** — `Prev close $142.10 (+3.2%) · Vol 18M · RSI 68` (labeled prev-session data)
   - **Red flags** — shown when present
   - Source links (Reddit permalink, Stocktwits symbol page when trending)
 - Existing tag tiers (high/medium/low) can map to composite bands above the threshold, e.g. ≥8.5 high, 7.0–8.5 medium.
