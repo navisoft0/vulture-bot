@@ -86,15 +86,14 @@ def post_play(record) -> bool:
             "value": "\n".join(_fmt_play(p) for p in ts.plays_discussed[:5])[:1024],
             "inline": False,
         })
-    fields.append({
-        "name": "Score Breakdown",
-        "value": (
-            f"Thesis {ts.thesis_quality:.0f} · Community {ts.community_conviction:.0f} · "
-            f"News {ts.news_catalyst:.0f} · Technicals {ts.technical_setup:.0f}"
-            + (" · 🔁 Trending on Stocktwits" if record.cross_platform else "")
-        ),
-        "inline": False,
-    })
+    breakdown = (
+        f"Thesis {ts.thesis_quality:.0f} · Community {ts.community_conviction:.0f} · "
+        f"News {ts.news_catalyst:.0f} · Technicals {ts.technical_setup:.0f}"
+        + (" · 🔁 Trending on Stocktwits" if record.cross_platform else "")
+    )
+    if getattr(record, "momentum_line", None):
+        breakdown += f"\n{record.momentum_line}"
+    fields.append({"name": "Score Breakdown", "value": breakdown, "inline": False})
     if record.market_line:
         fields.append({"name": "Market Context (prev session)", "value": record.market_line, "inline": False})
     if ts.red_flags:

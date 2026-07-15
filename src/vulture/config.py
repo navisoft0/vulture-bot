@@ -74,6 +74,15 @@ SCAN_INTERVAL_MIN = int(os.getenv("SCAN_INTERVAL_MIN", "45"))
 #: recaps land in the evening US/Eastern).
 CRAMER_HOUR_UTC = int(os.getenv("CRAMER_HOUR_UTC", "23"))
 
+#: Attention momentum: rolling window (hours) for counting repeat mentions.
+MOMENTUM_WINDOW_H = int(os.getenv("MOMENTUM_WINDOW_H", "72"))
+
+#: Don't repost the same ticker within this many hours...
+REPOST_COOLDOWN_H = int(os.getenv("REPOST_COOLDOWN_H", "12"))
+
+#: ...unless its new composite beats the previously posted one by this margin.
+REPOST_MARGIN = float(os.getenv("REPOST_MARGIN", "0.5"))
+
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "data")
 
 # Google Sheets worksheet (tab) names.

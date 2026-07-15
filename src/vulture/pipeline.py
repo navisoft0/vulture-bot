@@ -9,16 +9,18 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from . import analysis, clients, config, notify, scoring, sheets, state
+from . import analysis, clients, config, momentum, notify, scoring, sheets, state
 from .analysis import TickerScore
 from .signals import reddit, stocktwits
 
 log = logging.getLogger(__name__)
 
+# Column order matters: momentum.py reads this tab back by index.
 SHEET_HEADER = [
     "post_id", "ticker", "composite", "thesis", "community", "news", "technical",
     "cross_platform", "posted", "briefing", "plays_json", "red_flags",
     "url", "subreddit", "post_created_utc", "scored_at_utc",
+    "prior_mentions", "momentum_bonus",
 ]
 
 
@@ -29,6 +31,9 @@ class ScoredCandidate:
     composite: float
     cross_platform: bool
     market_line: str | None
+    prior_mentions: int = 0
+    momentum_bonus: float = 0.0
+    momentum_line: str | None = None
     posted: bool = False
 
     @property
@@ -187,7 +192,9 @@ def run_scan() -> None:
     # Phase 2: score (Batches API when enabled — 50% cheaper; sync fallback).
     results = analysis.score_many(jobs)
 
-    # Phase 3: post-process scores.
+    # Phase 3: post-process scores. Momentum history comes from the Sheet log
+    # of prior runs (read before this run's rows are appended).
+    history = momentum.load_history()
     scored: list[ScoredCandidate] = []
     for post_id, ts in results.items():
         if ts.ticker in ("N/A", ""):
@@ -195,13 +202,18 @@ def run_scan() -> None:
         ctx = context[post_id]
         _check_contracts(ts, market)
         cross = ts.ticker in trending
-        comp = scoring.composite(ts, cross_platform=cross)
+        hist = history.get(ts.ticker)
+        m_bonus, m_line = momentum.bonus(hist, ctx["post"]["subreddit"])
+        comp = scoring.composite(ts, cross_platform=cross, momentum_bonus=m_bonus)
         scored.append(ScoredCandidate(
             post=ctx["post"], score=ts, composite=comp, cross_platform=cross,
             market_line=market.market_line(ctx["bar"], ctx["rsi"], ctx["bars30"])
             if ctx["enriched_sym"] == ts.ticker else None,
+            prior_mentions=hist.count if hist else 0,
+            momentum_bonus=m_bonus, momentum_line=m_line,
         ))
-        log.info("Scored %s at %.2f (post %s).", ts.ticker, comp, post_id)
+        log.info("Scored %s at %.2f (post %s%s).", ts.ticker, comp, post_id,
+                 f", momentum +{m_bonus:g}" if m_bonus else "")
 
     # One post per ticker per run: keep the highest composite.
     best: dict[str, ScoredCandidate] = {}
@@ -210,10 +222,17 @@ def run_scan() -> None:
             best[cand.score.ticker] = cand
 
     for cand in sorted(best.values(), key=lambda c: c.composite, reverse=True):
-        if cand.composite >= config.POST_THRESHOLD:
-            cand.posted = notify.post_play(cand)
-            log.info("Posted %s (%.2f) to Discord: %s",
-                     cand.score.ticker, cand.composite, cand.posted)
+        if cand.composite < config.POST_THRESHOLD:
+            continue
+        if not momentum.repost_allowed(history.get(cand.score.ticker), cand.composite):
+            log.info("Cooldown: %s (%.2f) already posted within %dh without a "
+                     "+%.1f improvement; logging only.",
+                     cand.score.ticker, cand.composite,
+                     config.REPOST_COOLDOWN_H, config.REPOST_MARGIN)
+            continue
+        cand.posted = notify.post_play(cand)
+        log.info("Posted %s (%.2f) to Discord: %s",
+                 cand.score.ticker, cand.composite, cand.posted)
 
     # Log every scored candidate for rubric tuning.
     now = datetime.now(timezone.utc).isoformat()
@@ -225,6 +244,7 @@ def run_scan() -> None:
         json.dumps([p.model_dump() for p in c.score.plays_discussed]),
         "; ".join(c.score.red_flags),
         c.post["url"], c.post["subreddit"], c.post["created_utc"], now,
+        c.prior_mentions, c.momentum_bonus,
     ] for c in scored]
     sheets.write_to_sheet(config.SHEET_SCORED_TAB, rows)
 

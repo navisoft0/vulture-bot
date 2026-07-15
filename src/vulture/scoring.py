@@ -22,11 +22,13 @@ RED_FLAG_PENALTY = 0.75
 RED_FLAG_PENALTY_CAP = 2.25
 
 
-def composite(score: TickerScore, cross_platform: bool = False) -> float:
+def composite(score: TickerScore, cross_platform: bool = False,
+              momentum_bonus: float = 0.0) -> float:
     if score.ticker in ("N/A", ""):
         return 0.0
     value = sum(getattr(score, dim) * w for dim, w in WEIGHTS.items())
     if cross_platform:
         value += CROSS_PLATFORM_BONUS
+    value += momentum_bonus  # repeat-mention signal, see momentum.py
     value -= min(len(score.red_flags) * RED_FLAG_PENALTY, RED_FLAG_PENALTY_CAP)
     return round(max(0.0, min(10.0, value)), 2)

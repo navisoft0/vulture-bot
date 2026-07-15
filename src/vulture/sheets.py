@@ -48,6 +48,17 @@ def write_to_sheet(worksheet_name, rows_to_append, clear_sheet=False, header=Non
     return False
 
 
+def read_all(worksheet_name):
+    """All rows of a tab as lists of strings; [] on any failure."""
+    try:
+        gc = clients.gspread_client()
+        worksheet = gc.open(config.get("GOOGLE_SHEET_NAME")).worksheet(worksheet_name)
+        return worksheet.get_all_values()
+    except Exception as e:
+        log.warning("Could not read sheet tab '%s': %s", worksheet_name, e)
+        return []
+
+
 def read_column(worksheet_name, col=1):
     """Read a column of values from a tab; returns [] on any failure."""
     try:
