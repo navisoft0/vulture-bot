@@ -104,6 +104,48 @@ class MarketData:
         except Exception:
             return None
 
+    def bars_summary(self, symbol: str, days: int = 30) -> dict | None:
+        """Summary of the last ~`days` trading days of daily bars: trend,
+        position in range, and whether the last session's volume spiked."""
+        def fetch():
+            end = date.today()
+            start = end - timedelta(days=int(days * 1.5) + 5)  # calendar -> trading days
+            return self._client.get_aggs(symbol, 1, "day", start.isoformat(),
+                                         end.isoformat(), limit=days + 10)
+
+        bars = self._call(("bars", symbol, days), fetch)
+        if not bars or len(bars) < 5:
+            return None
+        bars = bars[-days:]
+        closes = [b.close for b in bars if b.close is not None]
+        highs = [b.high for b in bars if b.high is not None]
+        lows = [b.low for b in bars if b.low is not None]
+        volumes = [b.volume for b in bars if b.volume]
+        if not (closes and highs and lows):
+            return None
+        hi, lo, last = max(highs), min(lows), closes[-1]
+        prior_vol = volumes[:-1]
+        return {
+            "sessions": len(bars),
+            "trend_pct": round((last - closes[0]) / closes[0] * 100, 1) if closes[0] else None,
+            "range_position_pct": round((last - lo) / (hi - lo) * 100) if hi > lo else None,
+            "volume_spike_x": round(volumes[-1] / (sum(prior_vol) / len(prior_vol)), 1)
+            if len(prior_vol) >= 5 else None,
+        }
+
+    def sma(self, symbol: str, window: int = 50) -> float | None:
+        """Latest daily simple moving average."""
+        result = self._call(
+            ("sma", symbol, window),
+            self._client.get_sma,
+            ticker=symbol, timespan="day", window=window, series_type="close", limit=1,
+        )
+        try:
+            values = getattr(result, "values", None) or []
+            return round(values[0].value, 2) if values else None
+        except Exception:
+            return None
+
     def recent_news(self, symbol: str, hours: int = 48, limit: int = 5) -> list[dict]:
         """Recent headlines for `symbol` (hourly-updated feed, free tier)."""
         def fetch():
@@ -166,8 +208,10 @@ class MarketData:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def market_line(bar: dict | None, rsi_value: float | None) -> str | None:
-        """One-line embed/prompt summary, e.g. 'Prev close $4.20 (+6.9%) · Vol 12.4M · RSI 71'."""
+    def market_line(bar: dict | None, rsi_value: float | None,
+                    bars30: dict | None = None) -> str | None:
+        """One-line embed/prompt summary, e.g.
+        'Prev close $4.20 (+6.9%) · Vol 12.4M · RSI 71 · 30d +42%'."""
         if not bar:
             return None
         bits = []
@@ -179,4 +223,6 @@ class MarketData:
             bits.append(f"Vol {v / 1e6:.1f}M" if v >= 1e6 else f"Vol {v / 1e3:.0f}K")
         if rsi_value is not None:
             bits.append(f"RSI {rsi_value:g}")
+        if bars30 and bars30.get("trend_pct") is not None:
+            bits.append(f"30d {bars30['trend_pct']:+.0f}%")
         return " · ".join(bits) if bits else None

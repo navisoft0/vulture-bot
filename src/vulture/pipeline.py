@@ -37,6 +37,7 @@ class ScoredCandidate:
 
 
 def _market_block(company: dict | None, bar: dict | None, rsi: float | None,
+                  bars30: dict | None, sma50: float | None,
                   news: list[dict], market) -> str | None:
     """Compact market-context text for the Claude prompt."""
     if not company:
@@ -45,6 +46,19 @@ def _market_block(company: dict | None, bar: dict | None, rsi: float | None,
     line = market.market_line(bar, rsi)
     if line:
         lines.append(f"Previous session: {line}")
+    if bars30:
+        parts = [f"trend {bars30['trend_pct']:+.1f}% over {bars30['sessions']} sessions"
+                 if bars30.get("trend_pct") is not None else None,
+                 f"price at {bars30['range_position_pct']}% of the 30-day range"
+                 if bars30.get("range_position_pct") is not None else None,
+                 f"prev-session volume {bars30['volume_spike_x']}x the 30-day average"
+                 if bars30.get("volume_spike_x") is not None else None]
+        parts = [p for p in parts if p]
+        if parts:
+            lines.append("30-day context: " + "; ".join(parts))
+    if sma50 is not None and bar and bar.get("close") is not None:
+        rel = "above" if bar["close"] >= sma50 else "below"
+        lines.append(f"SMA50: ${sma50:,.2f} (price {rel})")
     if news:
         lines.append("Recent headlines (last 48h, hourly feed):")
         for a in news:
@@ -131,7 +145,7 @@ def run_scan() -> None:
             continue
 
         # Validate candidates against Massive; enrich the first real one.
-        company = bar = rsi_val = None
+        company = bar = rsi_val = bars30 = sma50 = None
         news: list[dict] = []
         enriched_sym = None
         for sym in candidates:
@@ -142,6 +156,8 @@ def run_scan() -> None:
         if enriched_sym:
             bar = market.prev_day_bar(enriched_sym)
             rsi_val = market.rsi(enriched_sym)
+            bars30 = market.bars_summary(enriched_sym)
+            sma50 = market.sma(enriched_sym, window=50)
             news = market.recent_news(enriched_sym)
             if config.STOCKTWITS_ENABLED and enriched_sym not in st_stats_cache:
                 st_stats_cache[enriched_sym] = stocktwits.symbol_stats(enriched_sym)
@@ -149,7 +165,7 @@ def run_scan() -> None:
         comments = reddit.get_comments(post["id"])
         prompt = analysis.build_scoring_prompt(
             post, comments,
-            market_block=_market_block(company, bar, rsi_val, news, market),
+            market_block=_market_block(company, bar, rsi_val, bars30, sma50, news, market),
             stocktwits_block=_stocktwits_block(
                 st_stats_cache.get(enriched_sym), enriched_sym in trending
             ) if enriched_sym else None,
@@ -158,6 +174,7 @@ def run_scan() -> None:
         jobs.append({"id": post["id"], "prompt": prompt})
         context[post["id"]] = {
             "post": post, "enriched_sym": enriched_sym, "bar": bar, "rsi": rsi_val,
+            "bars30": bars30,
         }
 
     enriched_count = sum(1 for c in context.values() if c["enriched_sym"])
@@ -181,7 +198,7 @@ def run_scan() -> None:
         comp = scoring.composite(ts, cross_platform=cross)
         scored.append(ScoredCandidate(
             post=ctx["post"], score=ts, composite=comp, cross_platform=cross,
-            market_line=market.market_line(ctx["bar"], ctx["rsi"])
+            market_line=market.market_line(ctx["bar"], ctx["rsi"], ctx["bars30"])
             if ctx["enriched_sym"] == ts.ticker else None,
         ))
         log.info("Scored %s at %.2f (post %s).", ts.ticker, comp, post_id)

@@ -8,10 +8,10 @@ candidate — without touching prompts.
 from .analysis import TickerScore
 
 WEIGHTS = {
-    "thesis_quality": 0.30,
-    "community_conviction": 0.25,
+    "thesis_quality": 0.35,
+    "community_conviction": 0.30,
     "news_catalyst": 0.25,
-    "technical_setup": 0.20,
+    "technical_setup": 0.10,
 }
 
 #: Added when the ticker is also trending on Stocktwits (cross-platform confirmation).

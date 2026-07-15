@@ -133,11 +133,14 @@ news_catalyst — do the supplied recent headlines support a near-term move?
   0-3:  no relevant news, or news contradicts the thesis
   If NO news data is supplied, output exactly 5.0.
 
-technical_setup — does the supplied price/volume/RSI context fit the direction?
-  8-10: momentum and levels clearly align with the discussed direction
+technical_setup — does the supplied market context (prev-session price/volume, RSI,
+30-day trend and range position, volume spike vs 30-day average, SMA50) fit the
+discussed direction?
+  8-10: momentum, trend, and volume clearly align with the discussed direction
+        (a volume spike with the thesis direction is a strong positive)
   4-7:  neutral or ambiguous setup
-  0-3:  data contradicts the thesis (e.g. bullish thesis, RSI 85 after a huge run
-        can also justify a LOW score as chasing)
+  0-3:  data contradicts the thesis (e.g. bullish thesis, RSI 85 at the top of the
+        30-day range after a huge run can also justify a LOW score as chasing)
   If NO market data is supplied for the ticker you chose, output exactly 5.0.
 
 plays_discussed — extract the concrete option plays from the post AND comments:
