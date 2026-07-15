@@ -1,6 +1,8 @@
-# Vulture Bot Refactor Plan
+# Vulture Bot Refactor Plan (v2)
 
-**Goal:** restructure the bot around three pillars — the **Claude API** for all AI analysis, the **existing Discord webhook functions** as a reusable notification layer, and **Massive's free tier** ([massive.com/docs](https://massive.com/docs), formerly Polygon.io) as the single market-data provider — while fixing the structural and correctness issues in the current single-file script.
+**Product goal:** a trending-stock scanner focused on **options plays**. Reddit (and, best-effort, Stocktwits) surfaces candidate tickers; a news + technical + options-context scan scores them against an explicit rubric; only tickers that clear a threshold land in Discord, with the actionable plays being discussed. Everything else (earnings calendar, economic calendar, generic news dump) is stripped.
+
+**Pillars:** Claude API for all AI analysis · the existing Discord webhook functions as the notification layer · Massive's free tier ([massive.com/docs](https://massive.com/docs), formerly Polygon.io) for market + options data.
 
 ---
 
@@ -10,250 +12,228 @@ Everything lives in `src/vulture.py` (480 lines), driven by `python src/vulture.
 
 | Area | Today | Issues |
 |---|---|---|
-| AI analysis | OpenAI `gpt-4o` via `chat.completions` (`get_ai_synthesis`, `analyze_discussion_comments`) | JSON enforced only by prompt + `json_object` mode; no schema validation; the daily-sentiment system prompt is literally the stub `"You are a market sentiment analyst..."` |
-| Market data | Finnhub (`general_news`) + Alpha Vantage (earnings calendar, economic calendar) | Two providers, two keys, two client libraries; the `ECONOMIC_CALENDAR` Alpha Vantage function is not a documented AV endpoint and the date filter compares a tz-naive `releaseTime` against a tz-aware `datetime.now(timezone.utc)`, which raises `TypeError` in pandas — this scan is likely silently broken |
-| Discord | Three ad-hoc functions building embeds inline (`post_plays_to_discord`, `post_daily_summary`, `post_weekly_earnings_summary`) | Duplicated embed/posting logic; no retry on transient failures; forum tag mapping hardcoded inside the plays function |
-| State | `data/processed_posts.txt`, `data/daily_summary_log.txt` on local disk | Ephemeral on Railway-style hosts → duplicate posts after every redeploy |
-| Config | `check_environment_variables()` + all API clients constructed at import time | Import has side effects; can't unit-test any function without every credential present |
-| Packaging | `requirements.txt` is UTF-16 encoded with no version pins | `pip install -r` fails on Linux (pip expects UTF-8); `openpyxl`/`google-auth-oauthlib` listed but unused |
-| Misc bugs | `datetime.fromtimestamp(dt)` in news scan uses server-local tz; `daily_summary_log.txt` path constructed twice; ticker string from the LLM is trusted verbatim | |
+| AI analysis | OpenAI `gpt-4o` (`get_ai_synthesis`) | JSON enforced only by prompt; no schema validation; the daily-sentiment prompt is a literal stub |
+| Scoring rubric | **Embedded in the GPT-4o system prompt** (`src/vulture.py:176-195`): a single 0–10 `confidence_score` judged holistically by the LLM (8–10 strong thesis + community validation, 4–7.9 mixed, 0.1–3.9 speculative/criticized, 0 no play) | No measurable inputs (no price, news, or options data); **no posting threshold** — everything scoring > 0 gets posted, the score only picks the forum tag color |
+| Market data | Finnhub news + Alpha Vantage calendars | Being removed per product decision; the economic-calendar scan also has a tz-comparison bug that crashes it |
+| Discord | Three ad-hoc embed functions | Duplicated posting logic, no retry, tag mapping inline |
+| State | Flat files in `data/` | Ephemeral on Railway-style hosts → duplicate posts after redeploys |
+| Config/packaging | Import-time side effects; UTF-16 `requirements.txt` with no pins | `pip install -r` fails on Linux; nothing unit-testable |
 
-What works well and should be preserved: the overall scan pipeline shape, the confidence-score → forum-tag mapping, the drop-duplicates ranking in `run_reddit_scan`, and the Google Sheets writer with its layered exception handling.
+Preserved: the scan pipeline shape, praw scraping, pandas rank/dedupe, Google Sheets writer, Discord forum-thread mechanics.
 
----
-
-## 2. Target Architecture
-
-```
-vulture-bot/
-├── requirements.txt          # UTF-8, pinned: anthropic, massive, praw, gspread, ...
-├── REFACTOR_PLAN.md
-└── src/
-    └── vulture/
-        ├── __init__.py
-        ├── __main__.py       # argparse entry: python -m vulture {reddit|news|calendar}
-        ├── config.py         # env loading + validation (lazy, testable)
-        ├── clients.py        # lazy singletons: anthropic, massive, praw, gspread
-        ├── analysis.py       # Claude API calls (Pydantic-validated)
-        ├── market.py         # Massive wrapper + rate limiter + ticker cache
-        ├── notify.py         # Discord layer (generalized from existing functions)
-        ├── sheets.py         # write_to_sheet (moved as-is)
-        ├── state.py          # processed-post tracking (pluggable backend)
-        └── scans/
-            ├── reddit.py     # run_reddit_scan
-            ├── news.py       # run_news_scan
-            └── calendar.py   # run_calendar_scan
-```
-
-No framework, no async rewrite — the same three cron entry points, just modularized so each piece is testable and replaceable.
+**Removed entirely:** `run_news_scan` (as a standalone sheet dump — news becomes a scoring input), `run_calendar_scan`, `post_weekly_earnings_summary`, Finnhub, Alpha Vantage, and their env vars.
 
 ---
 
-## 3. Workstream A — OpenAI → Claude API
+## 2. Target Pipeline
 
-Replace the `openai` dependency with the official `anthropic` SDK. Model: **`claude-opus-4-8`**.
+```
+                 ┌─ SIGNALS ──────────────────────────────┐
+                 │ Reddit: wsb, shortsqueeze, elite, small │
+                 │ Stocktwits: trending symbols (best-     │
+                 │   effort, unofficial endpoints)         │
+                 └───────────────┬─────────────────────────┘
+                                 ▼
+                   candidate tickers + source posts
+                                 ▼
+                 ┌─ ENRICHMENT (Massive, cached) ─────────┐
+                 │ ticker validation (Ticker Overview)     │
+                 │ prev-day bar, RSI/SMA (EOD)             │
+                 │ ticker news (last 48h)                  │
+                 │ options chain snapshot (EOD)            │
+                 └───────────────┬─────────────────────────┘
+                                 ▼
+                 ┌─ SCORING (Claude, structured output) ──┐
+                 │ per-dimension sub-scores + extracted    │
+                 │ plays; composite computed in code       │
+                 └───────────────┬─────────────────────────┘
+                                 ▼
+                       composite ≥ POST_THRESHOLD ?
+                          │ yes                │ no
+                          ▼                    ▼
+                 Discord forum post      Google Sheet only
+                 (play details, market   (research log, rubric
+                  context, options)       tuning data)
+```
 
-### 3.1 Post synthesis (`get_ai_synthesis` → `analysis.synthesize_play`)
+Everything scored — posted or not — is logged to the Sheet with its sub-scores. That log is how the rubric weights get tuned over time.
 
-Use `client.messages.parse()` with a Pydantic schema so malformed JSON becomes impossible instead of a silently-dropped post:
+### Target layout
+
+```
+src/vulture/
+├── __main__.py       # python -m vulture {scan|cramer}
+├── config.py         # env + tunables (POST_THRESHOLD, rubric weights)
+├── clients.py        # lazy singletons: anthropic, massive, praw, gspread
+├── signals/
+│   ├── reddit.py     # praw scraping (current logic, moved)
+│   └── stocktwits.py # trending symbols + per-symbol sentiment (best-effort)
+├── market.py         # Massive wrapper: throttle, cache, stocks + options
+├── analysis.py       # Claude scoring + play extraction (Pydantic)
+├── scoring.py        # composite score from sub-scores (deterministic, tunable)
+├── notify.py         # Discord layer (generalized from existing functions)
+├── sheets.py         # write_to_sheet (moved as-is)
+├── state.py          # processed-post tracking (pluggable backend)
+└── trackers/
+    └── cramer.py     # nice-to-have, Phase 5
+```
+
+---
+
+## 3. Signal Ingestion
+
+### 3.1 Reddit (exists — moved, not rewritten)
+
+Current `scrape_new_posts` + `get_comments_for_post` carry over. The daily-discussion-thread sentiment summary can stay as a low-cost daily briefing or be dropped — flagged as an open question.
+
+### 3.2 Stocktwits (new, best-effort)
+
+There is **no official open Stocktwits developer API** anymore (partner-gated), but the public JSON endpoints the website itself uses remain accessible unauthenticated and are widely used:
+
+- `https://api.stocktwits.com/api/2/trending/symbols.json` — ~30 trending tickers with watchlist counts
+- `https://api.stocktwits.com/api/2/streams/symbol/{TICKER}.json` — recent messages, each optionally tagged Bullish/Bearish (native sentiment labels)
+
+Design rules, since this is undocumented and can break or throttle at any time:
+
+1. **Treat as a bonus signal, never a dependency.** `signals/stocktwits.py` returns `[]` on any failure; the pipeline runs Reddit-only without it.
+2. **Two roles:** (a) trending list seeds candidates that Reddit hasn't surfaced yet; (b) for Reddit-sourced candidates, the symbol stream provides a cross-platform confirmation datapoint (message volume + bullish/bearish ratio) that feeds the rubric.
+3. Gentle usage: 1 trending call + 1 stream call per candidate ticker per run, cached for the run, generous timeouts, honest `User-Agent`.
+4. If it hard-breaks later, an Apify/RapidAPI wrapper is a drop-in swap behind the same interface.
+
+---
+
+## 4. Enrichment — Massive Free Tier
+
+Both **Stocks Basic** and **Options Basic** free plans exist: 5 API calls/min each, end-of-day data, 2 years history. Options Basic covers all US options tickers with contracts reference, aggregates, and snapshots; **real-time greeks/IV/open interest/trades are paid-only** — at EOD granularity we get chain pricing and volume, which is enough for "is there unusual positioning" context, not for live flow. Client: `pip install massive`.
+
+Per-candidate enrichment budget (all cached by `(endpoint, ticker, date)` since data is EOD):
+
+| Call | Endpoint | Feeds |
+|---|---|---|
+| Validate ticker | Ticker Overview | Kills hallucinated tickers before scoring; company name for embeds |
+| Price/volume | Previous Day Bar | Technical sub-score input + embed context line |
+| Momentum | RSI (and/or SMA) | Technical sub-score input |
+| Catalyst check | Ticker News (filtered to last 48h) | News sub-score input — headlines go into the Claude prompt |
+| Options context | Option Chain Snapshot (EOD) | Options sub-score input: volume concentration by expiry/strike, put/call volume skew, where the discussed strikes sit vs. the chain |
+
+≈ 5 calls per new ticker per day. A scan surfacing 8 unique candidates ≈ 40 calls ≈ 8–9 minutes of rate-limit budget — fine for a cron job, and the throttle sleeps overlap with Claude calls. `market.py` owns a single lock-guarded throttle (~13s between calls) + per-day cache, exactly as sketched in v1 §4.3.
+
+---
+
+## 5. Scoring — Claude + Explicit Rubric
+
+The single-vibe `confidence_score` is replaced by **per-dimension sub-scores from Claude + a composite computed in code**. Claude judges what LLMs are good at judging; the weighting stays deterministic and tunable without touching prompts.
+
+### 5.1 Structured output schema
 
 ```python
-import anthropic
-from pydantic import BaseModel, Field
+class OptionPlay(BaseModel):
+    direction: Literal["bullish", "bearish", "neutral"]
+    structure: str            # e.g. "calls", "puts", "call debit spread"
+    strike: str | None        # as discussed, e.g. "$150"
+    expiry: str | None        # as discussed, e.g. "2026-08-21" or "monthlies"
+    rationale: str            # one-liner: why this play, per the thread
 
-class PlayAnalysis(BaseModel):
+class TickerScore(BaseModel):
     ticker: str
-    briefing: str
-    the_play: str
-    confidence_score: float = Field(ge=0.0, le=10.0)
-
-client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
-
-def synthesize_play(post: dict, comments_text: str) -> PlayAnalysis | None:
-    response = client.messages.parse(
-        model="claude-opus-4-8",
-        max_tokens=2048,
-        system=SYNTHESIS_SYSTEM_PROMPT,          # current prompt carries over nearly verbatim
-        messages=[{"role": "user", "content": build_user_prompt(post, comments_text)}],
-        output_format=PlayAnalysis,
-    )
-    return response.parsed_output
+    thesis_quality: float        # 0-10: is there an actual thesis with a catalyst/timeline?
+    community_conviction: float  # 0-10: comment validation vs. being torn apart
+    news_catalyst: float         # 0-10: do the last-48h headlines support a near-term move?
+    technical_setup: float       # 0-10: momentum/level context from bar + RSI data provided
+    options_context: float       # 0-10: does EOD chain volume/skew corroborate the direction?
+    plays_discussed: list[OptionPlay]
+    briefing: str                # synthesized thesis + community reaction
+    red_flags: list[str]         # pump patterns, illiquid chain, stale thesis, etc.
 ```
 
-Notes:
-- The existing system prompt (analyst persona, scoring rubric) transfers as-is; drop the "respond only with JSON" boilerplate — structured outputs handle that.
-- **Market-data grounding (new):** once Workstream B lands, append a compact context block to the user prompt — previous-day OHLCV and RSI from Massive — so confidence scores are grounded in real price action, not just Reddit sentiment.
-- Error handling: catch typed exceptions (`anthropic.RateLimitError`, `anthropic.APIStatusError`) instead of bare `Exception`, and check `stop_reason` before trusting output.
+One `client.messages.parse()` call per candidate on **`claude-opus-4-8`**, with the user prompt containing: the post + top comments, Stocktwits stream stats (if available), Massive news headlines, the prev-day bar + RSI, and a compact chain summary. Each sub-score's rubric bands (what a 2 vs. a 7 vs. a 9 looks like) live in the system prompt — this is the evolved version of the current prompt's scoring rules, now anchored to concrete data.
 
-### 3.2 Daily sentiment summary (`analyze_discussion_comments`)
-
-Same migration, plus actually write the system prompt (it's a stub today). Free-text output, so a plain `messages.create()` call with the standard content-block loop is enough.
-
-### 3.3 Optional (Phase 4): Batches API
-
-The Reddit scan analyzes up to ~100 posts per run serially and is not latency-sensitive (cron job). Moving synthesis to the **Message Batches API** halves token cost (50% discount) and removes per-request rate-limit pressure. Keep it as a follow-up — the sync loop is fine to ship first.
-
-### 3.4 Env var changes
-
-- Remove: `OPENAI_API_KEY`
-- Add: `ANTHROPIC_API_KEY`
-
----
-
-## 4. Workstream B — Finnhub + Alpha Vantage → Massive
-
-Consolidate both market-data providers onto Massive's free **Stocks Basic** tier. Client: `pip install massive` (`from massive import RESTClient`).
-
-### 4.1 Free-tier constraints (design inputs)
-
-| Constraint | Value | Consequence |
-|---|---|---|
-| Rate limit | **5 API calls / minute** | Every Massive call goes through one throttle (see 4.3) |
-| Data freshness | **End-of-day** | Fine for a Reddit-sentiment bot; embeds must be labeled "prev close", never "live" |
-| History | 2 years | Plenty for RSI/SMA context |
-| Included | Reference data, corporate actions, aggregates, technical indicators, snapshots, news | Financial statements/ratios are paid — don't build against them |
-
-### 4.2 Endpoint mapping
-
-| Current call | Replacement (Massive) | Notes |
-|---|---|---|
-| Finnhub `general_news('general')` | **Ticker News** (`list_ticker_news`) | Richer payload: per-article tickers, publisher, sentiment insights. Can be filtered to tickers the bot actually flagged — more relevant than Finnhub's generic firehose |
-| Alpha Vantage earnings calendar | ⚠️ **No free equivalent** — see 4.4 | Massive free tier has IPOs, dividends, splits, but no earnings calendar |
-| Alpha Vantage `ECONOMIC_CALENDAR` | ⚠️ Broken today; no Massive equivalent | Replace with **Market Holidays** + corporate-action events, or keep AV solely for this if it's ever fixed |
-| *(none — new)* | **Ticker Overview** | Validate LLM-extracted tickers before posting; fetch company name for embeds |
-| *(none — new)* | **Previous Day Bar** | Price/volume enrichment for Discord embeds and Claude prompts |
-| *(none — new)* | **RSI / SMA** technical indicators | One-line momentum context in the play embed |
-| *(none — new)* | **Top Market Movers** | Optional daily-briefing section |
-
-### 4.3 `market.py` — wrapper with throttle + cache
-
-The 5-calls/minute budget is the central design constraint. One module owns it:
+### 5.2 Composite (in `scoring.py`, not in the prompt)
 
 ```python
-# market.py (sketch)
-import time, threading
-from massive import RESTClient
+WEIGHTS = {           # config-tunable
+    "thesis_quality": 0.25,
+    "community_conviction": 0.20,
+    "news_catalyst": 0.20,
+    "technical_setup": 0.15,
+    "options_context": 0.20,
+}
+CROSS_PLATFORM_BONUS = 0.5   # ticker also trending on Stocktwits
+RED_FLAG_PENALTY = 0.75      # per flag, capped
 
-class MassiveClient:
-    """Rate-limited, cached wrapper around Massive's free tier."""
-    MIN_INTERVAL = 13.0  # ~4.6 calls/min, safely under 5
-
-    def __init__(self, api_key: str):
-        self._client = RESTClient(api_key)
-        self._lock = threading.Lock()
-        self._last_call = 0.0
-        self._cache: dict[tuple, tuple[float, object]] = {}  # (key) -> (ts, value)
-
-    def _throttled(self, fn, *args, cache_key=None, ttl=3600, **kwargs):
-        if cache_key and cache_key in self._cache:
-            ts, val = self._cache[cache_key]
-            if time.time() - ts < ttl:
-                return val
-        with self._lock:
-            wait = self.MIN_INTERVAL - (time.time() - self._last_call)
-            if wait > 0:
-                time.sleep(wait)
-            self._last_call = time.time()
-        val = fn(*args, **kwargs)
-        if cache_key:
-            self._cache[cache_key] = (time.time(), val)
-        return val
-
-    def validate_ticker(self, symbol: str) -> dict | None: ...
-    def prev_day_bar(self, symbol: str) -> dict | None: ...
-    def rsi(self, symbol: str) -> float | None: ...
-    def ticker_news(self, symbol: str | None = None, limit: int = 20) -> list: ...
+POST_THRESHOLD = 7.0         # config; only composite >= threshold posts to Discord
 ```
 
-Budgeting rule of thumb per Reddit scan: with EOD data, a ticker's bar/RSI/overview never changes intraday — cache by `(endpoint, ticker, date)` so repeat mentions of the same ticker across posts cost zero calls. A typical scan flagging 5–10 unique tickers needs ~15–30 Massive calls ≈ 4–7 minutes of budget, which is acceptable for a cron job (and the sleep happens while Claude calls run anyway).
+Starting weights are a proposal — the Sheet log of every scored candidate (posted or not, with sub-scores) exists precisely so these can be tuned against what actually moved.
 
-### 4.4 The earnings-calendar gap — decision needed
+### 5.3 Cost/latency controls
 
-Massive's free tier does not include an earnings calendar. Three options, in recommended order:
-
-1. **Keep Alpha Vantage for earnings only** (it works today) and drop it for everything else. One legacy key, minimal code.
-2. Replace the weekly earnings post with a **Massive-native "week ahead" post**: upcoming IPOs + ex-dividend dates + market holidays. Fully consolidates providers but changes the product.
-3. Pay for Massive Starter ($29/mo) — out of scope for a free-tier plan.
-
-The plan below assumes **option 1** unless you'd rather change the feature.
-
-### 4.5 Env var changes
-
-- Remove: `FINNHUB_API_KEY` (and `ALPHA_VANTAGE_API_KEY` if option 2 is chosen)
-- Add: `MASSIVE_API_KEY`
+- Posts with no plausible ticker candidate (cheap regex/`$TICKER` pre-filter + Massive validation) never reach Claude.
+- Optional Phase-6: move scoring to the **Batches API** (50% cost) since the scan is cron-driven and not latency-sensitive.
 
 ---
 
-## 5. Workstream C — Discord Layer (`notify.py`)
+## 6. Discord — Threshold-Gated Posting
 
-The existing webhook functions work; the refactor extracts the shared mechanics and keeps the three call sites thin.
+`notify.py` generalizes the existing functions (single `send_embed` path, retry/backoff honoring `Retry-After`, tag/color mapping extracted) — unchanged from v1 §5. What changes is the content:
 
-```python
-# notify.py (sketch)
-def send_embed(webhook_url: str, embed: dict, *, thread_name: str | None = None,
-               applied_tags: list[str] | None = None, retries: int = 3) -> bool:
-    """One posting path for all Discord messages: timeout, raise_for_status,
-    exponential backoff on 429/5xx (respecting Retry-After), returns success."""
-
-def confidence_style(score: float) -> tuple[str | None, int, str]:
-    """score -> (forum_tag_id, embed_color, emoji) — extracted from post_plays_to_discord."""
-
-def post_play(play: PlayAnalysis, market: MarketContext | None) -> bool: ...
-def post_daily_summary(text: str) -> bool: ...
-def post_week_ahead(events: WeekAhead) -> bool: ...
-```
-
-Changes vs. today:
-- **Retry with backoff on 429/5xx**, honoring Discord's `Retry-After` header (currently a single failed POST just prints and drops the play).
-- **Embeds enriched with Massive data** — the play embed gains a market-context field, e.g. `Prev close $4.20 (+6.9%) · Vol 12.4M · RSI 71` — this is the visible payoff of Workstream B.
-- Tag/color/emoji mapping moves to one function so the thresholds (≥8.0 / ≥4.0) live in exactly one place.
-- Everything else (thread naming, footer, `?wait=True`) carries over unchanged.
+- **Only composite ≥ `POST_THRESHOLD` posts.** Below-threshold candidates go to the Sheet only. Discord becomes "worth your time" by construction.
+- Thread name: `{TICKER} | {composite:.1f} | {emoji}` (existing convention, now a meaningful score).
+- Embed fields:
+  - **The Plays** — rendered from `plays_discussed`: `📈 Calls $150 · Aug 21 — "IV still cheap ahead of product event"` (one line per play)
+  - **Score breakdown** — `Thesis 8 · Community 7 · News 8 · Technicals 6 · Options 7`
+  - **Market context** — `Prev close $142.10 (+3.2%) · Vol 18M · RSI 68 · EOD data`
+  - **Red flags** — shown when present
+  - Source links (Reddit permalink, Stocktwits symbol page when trending)
+- Existing tag tiers (high/medium/low) can map to composite bands above the threshold, e.g. ≥8.5 high, 7.0–8.5 medium.
 
 ---
 
-## 6. Refactored Reddit Scan Flow
+## 7. Cramer Tracker (nice-to-have, Phase 5)
 
-```
-scrape_new_posts (praw)
-  → for each post: fetch top comments
-  → market.validate_ticker(candidate)          # NEW: kill hallucinated tickers early
-  → market context: prev bar + RSI (cached)    # NEW
-  → analysis.synthesize_play(post, comments, market_ctx)   # Claude, schema-validated
-  → rank + dedupe (unchanged pandas logic)
-  → notify.post_play(play, market_ctx)         # enriched embed, retries
-  → sheets.write_to_sheet(...)                 # unchanged
-  → state.mark_processed(ids)                  # pluggable backend
-```
+Goal: track which tickers Cramer is calling direction on, post a digest to the news webhook, and flag overlap with pipeline candidates ("🎪 Cramer mentioned this week" on scored plays — useful signal in either direction).
 
-Ticker validation is worth calling out: today, a hallucinated ticker sails straight into a Discord forum post. With Massive, `Ticker Overview` returning 404 → the play is downgraded/dropped before it ships, and a valid response supplies the real company name for the embed title.
+Source options, in recommended order:
+
+1. **CNBC Mad Money recaps + Claude extraction** (free). CNBC publishes episode recaps and lightning-round articles at cnbc.com/mad-money. `trackers/cramer.py` fetches recent recap articles, and one Claude call per article extracts `[{ticker, stance: buy/sell/trim/avoid, quote}]` via structured output. Runs on the existing stack, no new provider. Caveat: page-structure scraping is inherently brittle and subject to CNBC's ToS — same "best-effort, degrade gracefully" rules as Stocktwits.
+2. **Quiver Quantitative's Cramer tracker** ([quiverquant.com/cramertracker](https://www.quiverquant.com/cramertracker/)) — cleaner data via their paid API if this feature earns a budget line.
+
+Output: a `python -m vulture cramer` entry point (separate cron), a "Cramer Watch" embed digest, mentions stored in the Sheet, and a lookup the main scan consults to stamp overlap on play embeds.
 
 ---
 
-## 7. Cross-Cutting Fixes (rolled into the restructure)
+## 8. Cross-Cutting Fixes
 
-1. **`requirements.txt`** — rewrite as UTF-8 with pins: `anthropic`, `massive`, `praw`, `requests`, `python-dotenv`, `gspread`, `google-auth`, `pandas`. Drop `openai`, `finnhub-python`, `openpyxl`, `google-auth-oauthlib` (and `alpha_vantage` if option 4.4-2).
-2. **Lazy config/clients** — `config.py` validates env on first use (or via an explicit `validate()` call in `__main__.py`), clients built in `clients.py` accessors. Import stops having side effects; functions become unit-testable.
-3. **State backend** (`state.py`) — keep the flat-file implementation but behind an interface, and add a Google-Sheets-backed implementation (a "Processed" tab) since a Sheets client already exists. Fixes duplicate posts after redeploys with zero new infrastructure.
-4. **Timezone bugs** — all timestamps through `datetime.fromtimestamp(dt, tz=timezone.utc)`; the calendar tz-naive/aware comparison disappears with the AV economic-calendar code.
-5. **Logging** — replace `print` with the `logging` module (same messages, plus levels), so a hosted deployment can filter noise.
+Unchanged in substance from v1 — rolled into Phase 1:
+
+1. **`requirements.txt`** rewritten UTF-8 + pinned: `anthropic`, `massive`, `praw`, `requests`, `python-dotenv`, `gspread`, `google-auth`, `pandas`, `pydantic`. Dropped: `openai`, `finnhub-python`, `alpha_vantage`, `openpyxl`, `google-auth-oauthlib`.
+2. **Lazy config/clients** — no import-time side effects; functions unit-testable.
+3. **State backend** — flat file behind an interface + Sheets-backed implementation ("Processed" tab) so redeploys stop causing duplicate posts.
+4. **Timezone correctness** — all UTC-aware.
+5. **`logging`** instead of `print`.
+
+Env vars: **add** `ANTHROPIC_API_KEY`, `MASSIVE_API_KEY`, `POST_THRESHOLD`; **remove** `OPENAI_API_KEY`, `FINNHUB_API_KEY`, `ALPHA_VANTAGE_API_KEY`, calendar/news sheet vars.
 
 ---
 
-## 8. Migration Phases
+## 9. Migration Phases
 
 | Phase | Scope | Risk |
 |---|---|---|
-| **1. Skeleton + fixes** | Package layout (§2), UTF-8 pinned requirements, lazy config, logging, timezone fixes. Behavior unchanged. | Low — pure restructure, verifiable by running all three scans |
-| **2. Claude API** | `analysis.py` per §3; delete `openai`. Write the missing sentiment prompt. | Low — isolated to two functions; schema validation makes output *stricter* |
-| **3. Massive** | `market.py` per §4; news scan switched to Massive; ticker validation + embed enrichment wired into the Reddit scan; Discord layer generalized per §5. | Medium — new provider, rate-limit discipline; mitigated by cache + throttle |
-| **4. Nice-to-haves** | Batches API for synthesis (50% cost), Sheets-backed state, top-movers section in daily briefing, week-ahead post (if 4.4-2). | Low, optional |
+| **1. Skeleton + strip** | Package layout, UTF-8 pinned requirements, lazy config, logging, tz fixes. **Delete** news/calendar scans, Finnhub, Alpha Vantage. Reddit scan behavior otherwise unchanged. | Low |
+| **2. Claude API** | `analysis.py` with the structured-output schema (§5.1) but scoring on post+comments only (no market data yet); composite + threshold gate in `scoring.py`; Sheet logs sub-scores. Drop `openai`. | Low |
+| **3. Massive enrichment** | `market.py` (throttle + cache), ticker validation, bar/RSI/news/chain feeding the Claude prompt; enriched Discord embeds. | Medium — new provider + rate-limit discipline |
+| **4. Stocktwits** | `signals/stocktwits.py`: trending seeds + cross-platform confirmation, wired into candidates and the composite bonus. Best-effort by design. | Medium — unofficial endpoints |
+| **5. Cramer tracker** | `trackers/cramer.py` per §7, digest post + overlap stamp. | Low, optional |
+| **6. Tuning & cost** | Rubric weight tuning from the Sheet log; Batches API for scoring. | Low, optional |
 
-Each phase is independently shippable; the bot keeps running between phases.
+Each phase is independently shippable.
 
 ---
 
-## 9. Open Questions
+## 10. Open Questions
 
-1. **Earnings calendar** (§4.4): keep Alpha Vantage for earnings only, or replace with a Massive-native IPO/dividend/holiday "week ahead" post?
-2. **State**: is the host's filesystem persistent (volume attached), or should the Sheets-backed processed-post store land in Phase 3 instead of Phase 4?
-3. **News scan destination**: currently Sheets-only. Since Massive news is per-ticker, should top headlines for flagged tickers also go to the Discord news channel?
+1. **Threshold + weights** (§5.2): 7.0 and the proposed weights are starting points — tune from the Sheet log, or do you have priors?
+2. **Daily WSB sentiment briefing**: keep the once-a-day discussion-thread summary as a separate low-cost post, or drop it with the other extras?
+3. **Stocktwits appetite**: comfortable relying on the unofficial public endpoints (with graceful degradation), or prefer a paid wrapper (Apify/RapidAPI) from day one?
+4. **Cramer source**: CNBC-recaps-plus-Claude (free, brittle) vs. Quiver Quantitative paid API — does this feature justify a budget line if the free route proves flaky?
