@@ -130,6 +130,12 @@ def post_play(record) -> bool:
     )
 
 
+def _article_label(url: str) -> str:
+    """Readable link label from a CNBC article URL slug."""
+    slug = url.rstrip("/").rsplit("/", 1)[-1]
+    return (slug.removesuffix(".html").replace("-", " ") or "article")[:60]
+
+
 def post_cramer_digest(mentions, article_urls) -> bool:
     """Post a Cramer Watch digest to the news webhook. `mentions`: list[CramerMention]."""
     if not mentions:
@@ -145,7 +151,9 @@ def post_cramer_digest(mentions, article_urls) -> bool:
         "color": 0x4A90E2,
         "fields": [{
             "name": "Sources",
-            "value": "\n".join(f"[{u.split('/')[-2][:60]}]({u})" for u in article_urls[:5])[:1024],
+            "value": "\n".join(
+                f"[{_article_label(u)}]({u})" for u in article_urls[:5]
+            )[:1024],
             "inline": False,
         }],
         "timestamp": datetime.now(timezone.utc).isoformat(),
