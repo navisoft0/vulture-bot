@@ -46,7 +46,15 @@ def send_embed(webhook_url, embed, *, thread_name=None, applied_tags=None, retri
                 log.warning("Discord %s; retrying.", resp.status_code)
                 time.sleep(2 ** attempt)
                 continue
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                # 4xx won't fix itself on retry — surface Discord's reason.
+                # Common causes: webhook URL deleted/rotated (404/401), or the
+                # webhook is on the wrong channel type (400 "thread_name required"
+                # means a forum webhook got a plain post; plain posts need a
+                # text-channel webhook, forum posts need a forum webhook).
+                log.error("Discord rejected post '%s' (%s): %s",
+                          embed.get("title"), resp.status_code, resp.text[:300])
+                return False
             return True
         except requests.exceptions.RequestException as e:
             log.warning("Discord post failed (attempt %d/%d): %s", attempt + 1, retries, e)

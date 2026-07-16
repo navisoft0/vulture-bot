@@ -79,17 +79,23 @@ def run_cramer_tracker() -> None:
             used_urls.append(url)
         log.info("Extracted %d mentions from %s", len(extracted), url)
 
+    posted = True
     if mentions:
-        notify.post_cramer_digest(mentions, used_urls)
+        posted = notify.post_cramer_digest(mentions, used_urls)
         now = datetime.now(timezone.utc).isoformat()
         sheets.write_to_sheet(
             config.SHEET_CRAMER_TAB,
             [[now, m.ticker, m.stance, m.quote, ", ".join(used_urls)] for m in mentions],
         )
 
-    seen_store.add(new_urls)
-    log.info("--- Cramer tracker complete: %d articles, %d mentions ---",
-             len(used_urls), len(mentions))
+    if posted:
+        seen_store.add(new_urls)
+    else:
+        # Leave the articles unseen so the digest retries next run once the
+        # webhook is fixed (the sheet may then carry duplicate mention rows).
+        log.warning("Digest did not reach Discord; these articles will retry next run.")
+    log.info("--- Cramer tracker complete: %d articles, %d mentions, posted=%s ---",
+             len(used_urls), len(mentions), posted)
 
 
 def recent_mentions(days: int = 7) -> dict[str, str]:
