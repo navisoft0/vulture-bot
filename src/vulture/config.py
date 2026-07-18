@@ -70,9 +70,11 @@ BATCH_TIMEOUT_S = int(os.getenv("BATCH_TIMEOUT_S", "1800"))
 #: Daemon mode: minutes between scans.
 SCAN_INTERVAL_MIN = int(os.getenv("SCAN_INTERVAL_MIN", "45"))
 
-#: Daemon mode: UTC hour after which the daily Cramer run fires (Mad Money
-#: recaps land in the evening US/Eastern).
-CRAMER_HOUR_UTC = int(os.getenv("CRAMER_HOUR_UTC", "23"))
+#: Daemon mode: UTC hour after which the daily Cramer run fires. Default
+#: 13:00 UTC (9am ET): Mad Money recaps publish late evening ET, so a
+#: morning run delivers last night's episode pre-market. (The old 23:00
+#: default fired while the show was still airing.)
+CRAMER_HOUR_UTC = int(os.getenv("CRAMER_HOUR_UTC", "13"))
 
 #: Attention momentum: rolling window (hours) for counting repeat mentions.
 MOMENTUM_WINDOW_H = int(os.getenv("MOMENTUM_WINDOW_H", "72"))

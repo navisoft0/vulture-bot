@@ -7,7 +7,7 @@ Claude structured-output call over the article text.
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 
@@ -19,11 +19,15 @@ MAD_MONEY_URL = "https://www.cnbc.com/mad-money/"
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; vulture-bot/2.0; personal research tool)"}
 _TIMEOUT = 15
 
-_ARTICLE_RE = re.compile(r"https://www\.cnbc\.com/2\d{3}/\d{2}/\d{2}/[a-z0-9-]+\.html")
+_ARTICLE_RE = re.compile(r"https://www\.cnbc\.com/(2\d{3})/(\d{2})/(\d{2})/[a-z0-9-]+\.html")
 _TAG_RE = re.compile(r"<[^>]+>")
 _BLOCK_RE = re.compile(r"<(script|style|noscript)\b.*?</\1>", re.DOTALL | re.IGNORECASE)
 
 MAX_ARTICLES_PER_RUN = 3
+
+#: The landing page pins evergreen "guide to investing" articles from years
+#: ago; only articles published within this window are considered.
+MAX_ARTICLE_AGE_DAYS = 7
 
 
 def _fetch(url: str) -> str | None:
@@ -47,6 +51,27 @@ def _relevant(url: str) -> bool:
     return any(k in slug for k in ("cramer", "mad-money", "lightning"))
 
 
+def _recent_articles(landing_html: str) -> list[str]:
+    """Relevant article URLs from the landing page, newest first, capped to
+    MAX_ARTICLE_AGE_DAYS so pinned evergreen articles never crowd out recaps."""
+    cutoff = date.today() - timedelta(days=MAX_ARTICLE_AGE_DAYS)
+    dated: list[tuple[date, str]] = []
+    seen: set[str] = set()
+    for m in _ARTICLE_RE.finditer(landing_html):
+        url = m.group(0)
+        if url in seen:
+            continue
+        seen.add(url)
+        try:
+            published = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            continue
+        if published >= cutoff and _relevant(url):
+            dated.append((published, url))
+    dated.sort(key=lambda item: item[0], reverse=True)
+    return [url for _, url in dated]
+
+
 def run_cramer_tracker() -> None:
     config.validate_env("cramer")
     log.info("--- Cramer tracker starting ---")
@@ -56,7 +81,7 @@ def run_cramer_tracker() -> None:
         log.error("Mad Money landing page unavailable; aborting run.")
         return
 
-    urls = [u for u in dict.fromkeys(_ARTICLE_RE.findall(landing)) if _relevant(u)]
+    urls = _recent_articles(landing)
     seen_store = state.cramer_seen_store()
     seen = seen_store.load()
     new_urls = [u for u in urls if u not in seen][:MAX_ARTICLES_PER_RUN]
