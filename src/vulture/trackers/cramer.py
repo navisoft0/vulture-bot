@@ -122,6 +122,17 @@ def run_cramer_tracker() -> None:
     log.info("--- Cramer tracker complete: %d articles, %d mentions, posted=%s ---",
              len(used_urls), len(mentions), posted)
 
+    _update_scorecard()
+
+
+def _update_scorecard() -> None:
+    """Resolve and report past calls (isolated: never fails the digest run)."""
+    try:
+        from . import cramer_score
+        cramer_score.update()
+    except Exception:
+        log.exception("Cramer scorecard update failed; will retry tomorrow.")
+
 
 def recent_mentions(days: int = 7) -> dict[str, str]:
     """{ticker: stance} from the Cramer sheet within `days` (for overlap stamps)."""

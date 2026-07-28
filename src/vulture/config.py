@@ -91,6 +91,15 @@ OUTPUT_DIR = os.getenv("OUTPUT_DIR", "data")
 SHEET_SCORED_TAB = os.getenv("SHEET_SCORED_TAB", "Vulture Data")
 SHEET_PROCESSED_TAB = os.getenv("SHEET_PROCESSED_TAB", "Processed")
 SHEET_CRAMER_TAB = os.getenv("SHEET_CRAMER_TAB", "Cramer Watch")
+SHEET_CRAMER_SCORE_TAB = os.getenv("SHEET_CRAMER_SCORE_TAB", "Cramer Scorecard")
+
+# --- Cramer scorecard ---
+#: Days after a mention when the call is judged.
+CRAMER_EVAL_DAYS = int(os.getenv("CRAMER_EVAL_DAYS", "14"))
+#: Alpha vs SPY (percentage points) needed for a HIT/MISS; inside it's a WASH.
+CRAMER_ALPHA_PCT = float(os.getenv("CRAMER_ALPHA_PCT", "2.0"))
+#: Max tickers priced per daily scorecard run (rate-limit guard).
+CRAMER_EVAL_TICKER_CAP = int(os.getenv("CRAMER_EVAL_TICKER_CAP", "25"))
 
 # ---------------------------------------------------------------------------
 # Required environment variables, per command

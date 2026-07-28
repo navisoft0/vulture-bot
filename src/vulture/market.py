@@ -178,6 +178,42 @@ class MarketData:
                 break
         return out
 
+    def window_prices(self, symbol: str, start: date) -> dict | None:
+        """Baseline close on/just-before `start` and the latest close since.
+
+        Used by the Cramer scorecard: the baseline is the last close a viewer
+        could have acted near; return_pct measures the window since then.
+        """
+        def fetch():
+            return self._client.get_aggs(
+                symbol, 1, "day",
+                (start - timedelta(days=7)).isoformat(), date.today().isoformat(),
+                limit=120,
+            )
+
+        bars = self._call(("window", symbol, start.isoformat()), fetch)
+        if not bars:
+            return None
+        seq = [
+            (datetime.fromtimestamp(b.timestamp / 1000, tz=timezone.utc).date(), b.close)
+            for b in bars
+            if getattr(b, "close", None) and getattr(b, "timestamp", None)
+        ]
+        if not seq:
+            return None
+        seq.sort()
+        baseline = next((p for p in reversed(seq) if p[0] <= start), seq[0])
+        last = seq[-1]
+        if last[0] <= baseline[0]:
+            return None  # no sessions after the baseline yet
+        return {
+            "baseline_date": baseline[0].isoformat(),
+            "baseline_close": baseline[1],
+            "last_date": last[0].isoformat(),
+            "last_close": last[1],
+            "return_pct": round((last[1] - baseline[1]) / baseline[1] * 100, 2),
+        }
+
     # ------------------------------------------------------------------
     # Options (reference only — no pricing/greeks on the free tier)
     # ------------------------------------------------------------------

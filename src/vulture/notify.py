@@ -130,6 +130,49 @@ def post_play(record) -> bool:
     )
 
 
+def post_cramer_scorecard(resolved, open_positions, totals) -> bool:
+    """Daily Cramer performance card: new verdicts, open positions, record."""
+    verdict_emoji = {"HIT": "✅", "MISS": "❌", "WASH": "➖"}
+    stance_arrow = {"buy": "📈", "sell": "📉", "avoid": "📉", "trim": "📉"}
+    sections = []
+
+    if resolved:
+        lines = [
+            f"{verdict_emoji[r['verdict']]} **{r['ticker']}** — {r['stance'].upper()} "
+            f"on {r['stock']['baseline_date']} → {r['stock']['return_pct']:+.1f}% "
+            f"(SPY {r['spy_return_pct']:+.1f}%, α {r['alpha_pct']:+.1f}) "
+            f"**{r['verdict']}**"
+            + (" 🙃 inverse-Cramer moment" if r["verdict"] == "MISS" and r["stance"] == "buy" else "")
+            for r in resolved[:10]
+        ]
+        sections.append("**Resolved today (14-day window)**\n" + "\n".join(lines))
+
+    if open_positions:
+        lines = [
+            f"{stance_arrow.get(p['stance'], '➖')} {p['ticker']} ({p['stance']}, "
+            f"day {p['day']}): {p['stock']['return_pct']:+.1f}% (α {p['alpha_pct']:+.1f})"
+            for p in open_positions[:10]
+        ]
+        sections.append("**Open positions**\n" + "\n".join(lines))
+
+    judged = totals["HIT"] + totals["MISS"]
+    record = f"**All-time record:** {totals['HIT']} hits · {totals['MISS']} misses · {totals['WASH']} washes"
+    if judged:
+        record += (f" — hit rate {totals['HIT'] / judged:.0%}, "
+                   f"inverse-Cramer rate {totals['MISS'] / judged:.0%}")
+    sections.append(record)
+
+    embed = {
+        "title": "🎪 Cramer Scorecard",
+        "description": "\n\n".join(sections)[:4096],
+        "color": 0x9B59B6,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "footer": {"text": f"Judged vs SPY at ±{config.CRAMER_ALPHA_PCT:g}% alpha · "
+                           f"{config.CRAMER_EVAL_DAYS}-day window · not financial advice"},
+    }
+    return send_embed(config.get("DISCORD_WEBHOOK_NEWS"), embed)
+
+
 def _article_label(url: str) -> str:
     """Readable link label from a CNBC article URL slug."""
     slug = url.rstrip("/").rsplit("/", 1)[-1]
