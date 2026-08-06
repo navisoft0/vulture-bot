@@ -79,6 +79,13 @@ CRAMER_HOUR_UTC = int(os.getenv("CRAMER_HOUR_UTC", "13"))
 #: Attention momentum: rolling window (hours) for counting repeat mentions.
 MOMENTUM_WINDOW_H = int(os.getenv("MOMENTUM_WINDOW_H", "72"))
 
+#: Repeat radar: a ticker with at least this many PRIOR mentions in the window
+#: is posted even below POST_THRESHOLD (as a "radar" card) ...
+RADAR_MIN_MENTIONS = int(os.getenv("RADAR_MIN_MENTIONS", "2"))
+
+#: ... provided its composite is at least this floor.
+RADAR_FLOOR = float(os.getenv("RADAR_FLOOR", "5.5"))
+
 #: Don't repost the same ticker within this many hours...
 REPOST_COOLDOWN_H = int(os.getenv("REPOST_COOLDOWN_H", "12"))
 

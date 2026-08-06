@@ -101,6 +101,9 @@ def post_play(record) -> bool:
     )
     if getattr(record, "momentum_line", None):
         breakdown += f"\n{record.momentum_line}"
+    if getattr(record, "radar", False):
+        breakdown += ("\n👀 **Radar pick** — repeat mentions pushed this below-threshold "
+                      "candidate up for the group to investigate")
     fields.append({"name": "Score Breakdown", "value": breakdown, "inline": False})
     if record.market_line:
         fields.append({"name": "Market Context (prev session)", "value": record.market_line, "inline": False})

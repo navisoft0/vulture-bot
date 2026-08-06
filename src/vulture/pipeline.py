@@ -34,6 +34,7 @@ class ScoredCandidate:
     prior_mentions: int = 0
     momentum_bonus: float = 0.0
     momentum_line: str | None = None
+    radar: bool = False
     posted: bool = False
 
     @property
@@ -222,7 +223,13 @@ def run_scan() -> None:
             best[cand.score.ticker] = cand
 
     for cand in sorted(best.values(), key=lambda c: c.composite, reverse=True):
-        if cand.composite < config.POST_THRESHOLD:
+        main = cand.composite >= config.POST_THRESHOLD
+        # Repeat radar: repeat-mention tickers surface even below the main
+        # threshold — "worth the group's eyes", not a conviction call.
+        radar = (not main
+                 and cand.prior_mentions >= config.RADAR_MIN_MENTIONS
+                 and cand.composite >= config.RADAR_FLOOR)
+        if not (main or radar):
             continue
         if not momentum.repost_allowed(history.get(cand.score.ticker), cand.composite):
             log.info("Cooldown: %s (%.2f) already posted within %dh without a "
@@ -230,9 +237,10 @@ def run_scan() -> None:
                      cand.score.ticker, cand.composite,
                      config.REPOST_COOLDOWN_H, config.REPOST_MARGIN)
             continue
+        cand.radar = radar
         cand.posted = notify.post_play(cand)
-        log.info("Posted %s (%.2f) to Discord: %s",
-                 cand.score.ticker, cand.composite, cand.posted)
+        log.info("Posted %s (%.2f)%s to Discord: %s", cand.score.ticker,
+                 cand.composite, " [radar]" if radar else "", cand.posted)
 
     # Log every scored candidate for rubric tuning.
     now = datetime.now(timezone.utc).isoformat()
