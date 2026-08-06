@@ -107,6 +107,12 @@ SHEET_PROCESSED_TAB = os.getenv("SHEET_PROCESSED_TAB", "Processed")
 SHEET_CRAMER_TAB = os.getenv("SHEET_CRAMER_TAB", "Cramer Watch")
 SHEET_CRAMER_SCORE_TAB = os.getenv("SHEET_CRAMER_SCORE_TAB", "Cramer Scorecard")
 
+# --- Play tracker (dashboard) ---
+#: Premium return needed for a HIT/MISS on contract-graded plays; inside = WASH.
+PLAY_HIT_PCT = float(os.getenv("PLAY_HIT_PCT", "25"))
+#: Max plays graded per daily run (rate-limit guard).
+PLAY_GRADE_CAP = int(os.getenv("PLAY_GRADE_CAP", "20"))
+
 # --- Cramer scorecard ---
 #: Days after a mention when the call is judged.
 CRAMER_EVAL_DAYS = int(os.getenv("CRAMER_EVAL_DAYS", "14"))

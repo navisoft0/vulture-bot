@@ -6,10 +6,11 @@ sub-scores; that log is the dataset for tuning scoring.WEIGHTS over time.
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from . import analysis, clients, config, momentum, notify, scoring, sheets, state
+from . import analysis, clients, config, momentum, notify, scoring, sheets, state, store
 from .analysis import TickerScore
 from .signals import reddit, stocktwits
 
@@ -116,13 +117,15 @@ def _check_contracts(ts: TickerScore, market) -> None:
             )
 
 
-def run_scan() -> None:
+def run_scan(trigger: str = "cron") -> None:
     config.validate_env("scan")
-    log.info("--- Vulture scan starting ---")
+    scan_id = str(uuid.uuid4())
+    started_at = datetime.now(timezone.utc).isoformat()
+    log.info("--- Vulture scan starting (%s, trigger=%s) ---", scan_id[:8], trigger)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    store = state.processed_posts_store()
-    processed_ids = store.load()
+    processed_store = state.processed_posts_store()
+    processed_ids = processed_store.load()
 
     posts = reddit.scrape_new_posts(processed_ids)
     if not posts:
@@ -256,6 +259,27 @@ def run_scan() -> None:
     ] for c in scored]
     sheets.write_to_sheet(config.SHEET_SCORED_TAB, rows)
 
-    store.add(newly_processed)
+    # Dashboard dual-write (no-op unless DASHBOARD_API_URL is configured).
+    store.emit_scan(
+        {
+            "id": scan_id, "started_at": started_at,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "posts_seen": len(posts), "scored": len(scored),
+            "posted": int(sum(c.posted for c in best.values())), "trigger": trigger,
+        },
+        [{
+            "post_id": c.post["id"], "ticker": c.score.ticker, "composite": c.composite,
+            "thesis": c.score.thesis_quality, "community": c.score.community_conviction,
+            "news": c.score.news_catalyst, "technical": c.score.technical_setup,
+            "cross_platform": c.cross_platform, "prior_mentions": c.prior_mentions,
+            "momentum_bonus": c.momentum_bonus, "radar": c.radar, "posted": c.posted,
+            "briefing": c.score.briefing, "red_flags": "; ".join(c.score.red_flags),
+            "url": c.post["url"], "subreddit": c.post["subreddit"],
+            "post_created_utc": c.post["created_utc"], "scored_at_utc": now,
+            "plays": [p.model_dump() for p in c.score.plays_discussed],
+        } for c in scored],
+    )
+
+    processed_store.add(newly_processed)
     log.info("--- Scan complete: %d posts processed, %d scored, %d posted ---",
              len(newly_processed), len(scored), sum(c.posted for c in best.values()))

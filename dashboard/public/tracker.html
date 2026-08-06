@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vulture · Play Tracker</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="tracker">
+<nav>
+  <span class="brand">🦅 Vulture</span>
+  <a id="nav-today" href="/">Today</a>
+  <a id="nav-tracker" href="/tracker.html">Play Tracker</a>
+  <a id="nav-cramer" href="/cramer.html">Cramer</a>
+  <a id="nav-data" href="/data.html">Data</a>
+  <a id="nav-admin" href="/admin.html" style="display:none">Admin</a>
+  <span class="me" id="me">…</span>
+</nav>
+<main>
+  <h1>Play Tracker</h1>
+  <div class="sub">Promoted plays graded after expiry — premium return when contract data exists, ITM/OTM fallback.</div>
+  <div class="tiles" id="tiles"></div>
+  <h2 style="margin:18px 0 8px;font-size:16px">Open positions</h2>
+  <div class="tablewrap"><table><thead><tr><th>Ticker</th><th>Play</th><th>Expiry</th><th>Promoted</th><th>Source</th></tr></thead><tbody id="open"></tbody></table></div>
+  <h2 style="margin:24px 0 8px;font-size:16px">Resolved</h2>
+  <div class="tablewrap"><table><thead><tr><th>Ticker</th><th>Play</th><th>Verdict</th><th>Return</th><th>Method</th><th>Graded</th></tr></thead><tbody id="resolved"></tbody></table></div>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

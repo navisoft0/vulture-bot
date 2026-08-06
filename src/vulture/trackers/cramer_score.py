@@ -17,7 +17,7 @@ Runs inside the daily Cramer job; skips gracefully without MASSIVE_API_KEY.
 import logging
 from datetime import datetime, timedelta, timezone
 
-from .. import clients, config, notify, sheets
+from .. import clients, config, notify, sheets, store
 
 log = logging.getLogger(__name__)
 
@@ -155,6 +155,17 @@ def update() -> None:
             r["stock"]["return_pct"], r["spy_return_pct"], r["alpha_pct"],
             r["verdict"], r["quote"],
         ] for r in resolved])
+
+    if resolved:
+        store.emit_cramer_verdicts([{
+            "mention_at": r["key"][0], "ticker": r["ticker"],
+            "baseline_date": r["stock"]["baseline_date"],
+            "baseline_close": r["stock"]["baseline_close"],
+            "eval_date": r["stock"]["last_date"], "eval_close": r["stock"]["last_close"],
+            "stock_return_pct": r["stock"]["return_pct"],
+            "spy_return_pct": r["spy_return_pct"], "alpha_pct": r["alpha_pct"],
+            "verdict": r["verdict"],
+        } for r in resolved])
 
     if resolved or priced_open:
         notify.post_cramer_scorecard(resolved, priced_open, totals)

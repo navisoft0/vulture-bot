@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import requests
 
-from .. import analysis, config, notify, sheets, state
+from .. import analysis, config, notify, sheets, state, store
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +112,11 @@ def run_cramer_tracker() -> None:
             config.SHEET_CRAMER_TAB,
             [[now, m.ticker, m.stance, m.quote, ", ".join(used_urls)] for m in mentions],
         )
+        store.emit_cramer([
+            {"extracted_at": now, "ticker": m.ticker, "stance": m.stance,
+             "quote": m.quote, "source_url": ", ".join(used_urls)}
+            for m in mentions
+        ])
 
     if posted:
         seen_store.add(new_urls)

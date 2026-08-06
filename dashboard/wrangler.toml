@@ -1,0 +1,35 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "vulture-dashboard"
+main = "src/worker.js"
+compatibility_date = "2026-06-01"
+
+# Static frontend (served by the same Worker)
+[assets]
+directory = "public"
+binding = "ASSETS"
+
+# D1 database — create with: wrangler d1 create vulture
+# then paste the database_id it prints below.
+[[d1_databases]]
+binding = "DB"
+database_name = "vulture"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# R2 archive bucket — create with: wrangler r2 bucket create vulture-archive
+[[r2_buckets]]
+binding = "ARCHIVE"
+bucket_name = "vulture-archive"
+
+# Monthly retention/export cron (1st of month, 06:00 UTC)
+[triggers]
+crons = ["0 6 1 * *"]
+
+# Secrets (set with `wrangler secret put NAME`):
+#   INGEST_TOKEN      shared secret the Railway engine uses to POST data
+#   RUN_TOKEN         bearer token for the engine's run-now endpoint
+#   RUN_URL           e.g. https://<railway-app>.up.railway.app/run
+#   DISCORD_ARCHIVE_WEBHOOK   (optional) webhook for archive links
+[vars]
+ADMIN_EMAILS = "you@example.com"          # comma-separated
+RETENTION_DAYS = "90"
+# DEV_MODE = "1"                          # local dev only: skips Access auth

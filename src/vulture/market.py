@@ -178,20 +178,22 @@ class MarketData:
                 break
         return out
 
-    def window_prices(self, symbol: str, start: date) -> dict | None:
-        """Baseline close on/just-before `start` and the latest close since.
+    def window_prices(self, symbol: str, start: date, end: date | None = None) -> dict | None:
+        """Baseline close on/just-before `start` and the latest close since
+        (clamped to `end` when given — e.g. an option expiry).
 
-        Used by the Cramer scorecard: the baseline is the last close a viewer
-        could have acted near; return_pct measures the window since then.
+        Used by the Cramer scorecard and the play tracker; works for stock
+        tickers and OCC option symbols (O:...) alike.
         """
         def fetch():
             return self._client.get_aggs(
                 symbol, 1, "day",
-                (start - timedelta(days=7)).isoformat(), date.today().isoformat(),
+                (start - timedelta(days=7)).isoformat(),
+                (end or date.today()).isoformat(),
                 limit=120,
             )
 
-        bars = self._call(("window", symbol, start.isoformat()), fetch)
+        bars = self._call(("window", symbol, start.isoformat(), end.isoformat() if end else None), fetch)
         if not bars:
             return None
         seq = [
@@ -199,6 +201,8 @@ class MarketData:
             for b in bars
             if getattr(b, "close", None) and getattr(b, "timestamp", None)
         ]
+        if end:
+            seq = [p for p in seq if p[0] <= end]
         if not seq:
             return None
         seq.sort()
@@ -238,6 +242,14 @@ class MarketData:
         if result is None:
             return None
         return len(result) > 0
+
+    @staticmethod
+    def occ_symbol(underlying: str, expiry: str, contract_type: str, strike: float) -> str:
+        """OCC option symbol, e.g. occ_symbol('SPCX','2026-08-21','call',200) ->
+        'O:SPCX260821C00200000'."""
+        y, m, d = expiry.split("-")
+        cp = "C" if contract_type == "call" else "P"
+        return f"O:{underlying}{y[2:]}{m}{d}{cp}{int(round(strike * 1000)):08d}"
 
     # ------------------------------------------------------------------
     # Formatting helpers
