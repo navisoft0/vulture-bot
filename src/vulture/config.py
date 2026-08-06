@@ -24,19 +24,26 @@ TARGET_SUBREDDITS = [
 ]
 
 #: Composite score a candidate must reach to be posted to Discord.
-POST_THRESHOLD = float(os.getenv("POST_THRESHOLD", "7.0"))
+#: Calibrated against real score distributions (see sheet log): a solid post
+#: lands ~6, a strong one ~7 — 8+ is rare.
+POST_THRESHOLD = float(os.getenv("POST_THRESHOLD", "6.0"))
 
 #: Composite score at/above which the "high" forum tag is applied.
-HIGH_TAG_THRESHOLD = float(os.getenv("HIGH_TAG_THRESHOLD", "8.5"))
+HIGH_TAG_THRESHOLD = float(os.getenv("HIGH_TAG_THRESHOLD", "7.5"))
 
 #: Medium tag band lower bound (between POST_THRESHOLD and HIGH_TAG_THRESHOLD).
-MEDIUM_TAG_THRESHOLD = float(os.getenv("MEDIUM_TAG_THRESHOLD", "7.5"))
+MEDIUM_TAG_THRESHOLD = float(os.getenv("MEDIUM_TAG_THRESHOLD", "6.75"))
 
 #: Maximum posts per scan sent to Claude (cost guard).
 MAX_POSTS_PER_SCAN = int(os.getenv("MAX_POSTS_PER_SCAN", "40"))
 
 #: Maximum age of a Reddit post to consider, in days.
 MAX_POST_AGE_DAYS = int(os.getenv("MAX_POST_AGE_DAYS", "2"))
+
+#: Minimum age (hours) before a post is scored. Fresh posts have no comments,
+#: which starved community_conviction; young posts stay unprocessed and are
+#: picked up by a later scan once the thread has reacted.
+MIN_POST_AGE_H = float(os.getenv("MIN_POST_AGE_H", "2"))
 
 #: Number of top comments fetched per post.
 COMMENTS_PER_POST = int(os.getenv("COMMENTS_PER_POST", "25"))
@@ -84,7 +91,7 @@ MOMENTUM_WINDOW_H = int(os.getenv("MOMENTUM_WINDOW_H", "72"))
 RADAR_MIN_MENTIONS = int(os.getenv("RADAR_MIN_MENTIONS", "2"))
 
 #: ... provided its composite is at least this floor.
-RADAR_FLOOR = float(os.getenv("RADAR_FLOOR", "5.5"))
+RADAR_FLOOR = float(os.getenv("RADAR_FLOOR", "5.0"))
 
 #: Don't repost the same ticker within this many hours...
 REPOST_COOLDOWN_H = int(os.getenv("REPOST_COOLDOWN_H", "12"))

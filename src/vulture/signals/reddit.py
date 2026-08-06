@@ -55,11 +55,18 @@ def extract_candidate_tickers(text: str, max_candidates: int = 3) -> list[str]:
 
 
 def scrape_new_posts(processed_ids: set[str]) -> list[dict]:
-    """Fetch recent, unseen, text-bearing posts from the target subreddits."""
+    """Fetch recent, unseen, text-bearing posts from the target subreddits.
+
+    Posts younger than MIN_POST_AGE_H are left unfetched AND unprocessed —
+    a later scan scores them once the thread has had time to react (fresh
+    posts have no comments, which starves community_conviction).
+    """
     reddit = clients.reddit_client()
     all_posts = []
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=config.MAX_POST_AGE_DAYS)
+    maturity = now - timedelta(hours=config.MIN_POST_AGE_H)
+    too_young = 0
 
     for sub in config.TARGET_SUBREDDITS:
         log.info("Fetching posts from r/%s...", sub)
@@ -74,6 +81,9 @@ def scrape_new_posts(processed_ids: set[str]) -> list[dict]:
             created = datetime.fromtimestamp(p.created_utc, timezone.utc)
             if created < cutoff:
                 continue
+            if created > maturity:
+                too_young += 1
+                continue
             if p.url.endswith((".jpeg", ".jpg", ".png", ".gif")) or "v.redd.it" in p.url:
                 continue
             all_posts.append({
@@ -86,7 +96,8 @@ def scrape_new_posts(processed_ids: set[str]) -> list[dict]:
                 "score": p.score,
                 "num_comments": p.num_comments,
             })
-    log.info("Found %d new candidate posts.", len(all_posts))
+    log.info("Found %d new candidate posts (%d deferred until they're %.0fh old).",
+             len(all_posts), too_young, config.MIN_POST_AGE_H)
     return all_posts
 
 

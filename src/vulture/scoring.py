@@ -17,11 +17,12 @@ WEIGHTS = {
 #: Added when the ticker is also trending on Stocktwits (cross-platform confirmation).
 CROSS_PLATFORM_BONUS = 0.5
 
-#: Subtracted per red flag, capped. Kept mild: flags are now defined as
-#: disqualifiers-only in the prompt, and they're displayed on the card —
-#: the reader can weigh them. The scanner's job is surfacing, not vetoing.
+#: Subtracted per red flag, capped. Kept mild: flags are defined as integrity
+#: disqualifiers only (max 3) in the prompt and displayed on the card — the
+#: reader weighs them. Sheet data showed count-based penalties acting as a
+#: constant tax (mean 5.8 flags/post under the old prompt), so the cap is low.
 RED_FLAG_PENALTY = 0.5
-RED_FLAG_PENALTY_CAP = 1.5
+RED_FLAG_PENALTY_CAP = 1.0
 
 
 def composite(score: TickerScore, cross_platform: bool = False,

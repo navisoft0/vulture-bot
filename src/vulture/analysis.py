@@ -129,8 +129,11 @@ thesis_quality — is there an actual setup with a mechanism?
 
 community_conviction — how did the comments receive it?
   8-10: substantive validation, informed agreement, people adding supporting data
-  4-7:  mixed reception or low engagement
-  0-3:  thesis torn apart, debunked, or mocked
+  4-7:  mixed reception
+  0-3:  thesis ACTIVELY torn apart, debunked, or mocked by substantive comments
+  If there are few or no substantive comments yet (fresh posts often have none —
+  automod notes and jokes don't count), output exactly 5.0. Absence of reaction
+  is neutral, never negative.
 
 news_catalyst — do the supplied headlines (or structural drivers) support a move?
   8-10: fresh, directly relevant headline catalyst — or the supplied market data
@@ -142,12 +145,16 @@ news_catalyst — do the supplied headlines (or structural drivers) support a mo
 
 technical_setup — does the supplied market context (prev-session price/volume, RSI,
 30-day trend and range position, volume spike vs 30-day average, SMA50) fit the
-discussed direction?
-  8-10: momentum, trend, and volume clearly align with the discussed direction
-        (a volume spike with the thesis direction is a strong positive)
-  4-7:  neutral or ambiguous setup
-  0-3:  data contradicts the thesis (e.g. bullish thesis, RSI 85 at the top of the
-        30-day range after a huge run can also justify a LOW score as chasing)
+STRATEGY the post is proposing? Judge fit-to-strategy, not absolute health:
+  - Momentum/breakout thesis: wants aligned trend and volume.
+  - Squeeze/reversal thesis: a washed-out chart (deep drawdown, oversold RSI,
+    price at lows) is the PRECONDITION, not a contradiction — score it on squeeze
+    evidence: volume picking up, oversold extremes, the post's SI/borrow data.
+  8-10: the supplied data fits the proposed strategy well
+  4-7:  neutral or ambiguous fit
+  0-3:  data genuinely contradicts the strategy (e.g. bullish momentum thesis on a
+        collapsing chart with no squeeze mechanics; chasing RSI 85 at the top of
+        the range)
   If NO market data is supplied for the ticker you chose, output exactly 5.0.
 
 plays_discussed — extract the concrete option plays from the post AND comments:
@@ -155,12 +162,13 @@ direction, structure (calls/puts/spreads/shares), strike as a number, and expiry
 normalized to YYYY-MM-DD when determinable (current date is provided). Only include
 plays actually discussed — do not invent your own.
 
-red_flags — DISQUALIFIERS ONLY, not generic caution. Flag: evidence of coordinated
-pumping (copy-paste shill comments, brand-new accounts pushing), claims directly
-contradicted by the supplied market data, fabricated-looking numbers, or a thesis
-that is already fully played out per the supplied data. Do NOT flag: speculation,
-volatility, meme status, small caps, absence of news, or the author not disclosing
-a position — those are normal here and are already priced into the sub-scores.
+red_flags — AT MOST 3, integrity disqualifiers only. Flag: evidence of coordinated
+pumping (copy-paste shill comments, brand-new accounts pushing), fabricated-looking
+numbers, or claims of fact the supplied data proves false. Do NOT flag anything a
+sub-score already prices: trend/momentum mismatch belongs in technical_setup, weak
+comments in community_conviction, missing news in news_catalyst. Never flag:
+speculation, volatility, meme status, small caps, absence of news, no position
+disclosed, or vague strikes. An ordinary risky post has ZERO red flags.
 
 Rules:
 - If no single clear ticker: ticker="N/A" and all scores 0.
