@@ -230,8 +230,16 @@ tr.ghead .chev {
 tr.ghead .chev::before { content: "▸"; }
 tr.ghead.open .chev { transform: rotate(90deg); }
 tr.gchild { display: none; }
-tr.gchild.shown { display: table-row; background: rgba(255, 255, 255, 0.015); }
+tr.gchild.shown {
+  display: table-row;
+  background: rgba(139, 92, 246, 0.06);
+  box-shadow: inset 3px 0 0 var(--accent-strong);
+}
+tr.gchild.shown:hover { background: rgba(139, 92, 246, 0.11); }
+tr.gchild td { border-top-color: rgba(139, 92, 246, 0.18); }
 tr.gchild td:first-child { padding-left: 26px; }
+tr.ghead.open { background: var(--panel2); }
+tr.ghead.open .chev { color: var(--accent); }
 
 .vbadge {
   font-family: var(--mono); font-size: 11px; font-weight: 700;
