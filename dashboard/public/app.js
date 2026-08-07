@@ -32,44 +32,105 @@ function playLine(p) {
   return `${arrow} <span class="num">${esc(bits.join(" · "))}</span>${p.rationale ? " — " + esc(p.rationale) : ""}`;
 }
 
-function candidateCard(c) {
+/* One card per ticker (per day) — `group` is every scored post for it,
+   newest first. The highest-composite post leads; sources expand below. */
+function tickerCard(group) {
+  const lead = group.slice().sort((a, b) => b.composite - a.composite)[0];
   const badges = [];
-  if (c.radar) badges.push('<span class="badge radar">radar</span>');
-  if (c.prior_mentions > 0) badges.push(`<span class="badge momentum">×${c.prior_mentions + 1} mentions</span>`);
-  if (c.cross_platform) badges.push('<span class="badge">stocktwits</span>');
-  if (c.posted) badges.push('<span class="badge">posted</span>');
-  const plays = (c.plays || []).map(p => `<li>${playLine(p)}</li>`).join("");
-  const flags = c.red_flags ? `<div class="flags">${esc(c.red_flags)}</div>` : "";
-  return `<div class="card ${scoreClass(c.composite)}">
+  if (group.some(c => c.radar) && !group.some(c => c.posted)) badges.push('<span class="badge radar">radar</span>');
+  if (lead.prior_mentions > 0) badges.push(`<span class="badge momentum">×${lead.prior_mentions + 1} mentions</span>`);
+  if (group.some(c => c.cross_platform)) badges.push('<span class="badge">stocktwits</span>');
+  if (group.some(c => c.posted)) badges.push('<span class="badge">posted</span>');
+
+  const seen = new Set();
+  const plays = [];
+  const byConviction = group.slice().sort((a, b) => b.composite - a.composite);
+  for (const c of byConviction) for (const p of c.plays || []) {
+    const key = `${p.direction}|${p.structure}|${p.strike}|${p.expiry}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    plays.push(`<li>${playLine(p)}</li>`);
+  }
+  const flags = [...new Set(group.map(c => c.red_flags).filter(Boolean))].join(" · ");
+
+  const source = s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">r/${esc(s.subreddit)} ↗</a>
+      · <span class="num">${Number(s.composite).toFixed(1)}</span> · ${when(s.scored_at_utc)}`;
+  const sources = group.length === 1
+    ? `<div class="meta">scored ${when(lead.scored_at_utc)} · ${source(lead)}</div>`
+    : `<details class="sources"><summary>${group.length} sources</summary>
+        <ul>${byConviction.map(s => `<li>${source(s)}</li>`).join("")}</ul></details>`;
+
+  const search = esc([lead.ticker, ...group.map(c => c.briefing), ...group.map(c => c.subreddit)]
+    .join(" ").toLowerCase());
+  return `<div class="card ${scoreClass(lead.composite)}" data-search="${search}">
     <div class="head">
-      <span class="ticker">${esc(c.ticker)}</span>
-      <span class="score ${scoreClass(c.composite)}">${Number(c.composite).toFixed(1)}</span>
+      <span class="ticker">${esc(lead.ticker)}</span>
+      <span class="score ${scoreClass(lead.composite)}">${Number(lead.composite).toFixed(1)}</span>
       ${badges.join(" ")}
     </div>
     <div class="subscores">
-      <span>thesis <b>${c.thesis}</b></span><span>community <b>${c.community}</b></span>
-      <span>news <b>${c.news}</b></span><span>technicals <b>${c.technical}</b></span>
+      <span>thesis <b>${lead.thesis}</b></span><span>community <b>${lead.community}</b></span>
+      <span>news <b>${lead.news}</b></span><span>technicals <b>${lead.technical}</b></span>
     </div>
-    <div class="brief">${esc(c.briefing)}</div>
-    ${plays ? `<ul class="plays">${plays}</ul>` : ""}
-    ${flags}
-    <div class="meta">r/${esc(c.subreddit)} · scored ${when(c.scored_at_utc)} ·
-      <a href="${esc(c.url)}" target="_blank" rel="noopener">reddit post ↗</a></div>
+    <div class="brief">${esc(lead.briefing)}</div>
+    ${plays.length ? `<ul class="plays">${plays.join("")}</ul>` : ""}
+    ${flags ? `<div class="flags">${esc(flags)}</div>` : ""}
+    ${sources}
   </div>`;
+}
+
+/* Stagger the entrance animation of freshly rendered cards/tiles. */
+function stagger() {
+  document.querySelectorAll(".cards .card, .tiles .tile")
+    .forEach((el, i) => el.style.setProperty("--i", Math.min(i, 12)));
 }
 
 const pages = {
   async today() {
     const all = new URLSearchParams(location.search).get("all") === "1";
-    const data = await api(`/api/today${all ? "?all=1" : ""}`);
+    const data = await api(`/api/overview?days=14${all ? "&all=1" : ""}`);
     $("#scan-info").textContent = data.scan
-      ? `Scan ${when(data.scan.started_at)} · ${data.scan.scored} scored · ${data.scan.posted} promoted · trigger: ${data.scan.trig || data.scan.trigger || "cron"}`
+      ? `Last scan ${when(data.scan.started_at)} · ${data.scan.scored} scored · ${data.scan.posted} promoted · trigger: ${data.scan.trig || data.scan.trigger || "cron"}`
       : "No scans ingested yet.";
     $("#toggle-all").href = all ? "?" : "?all=1";
     $("#toggle-all").textContent = all ? "show vetted only" : "show everything scored";
-    $("#cards").innerHTML = data.candidates.length
-      ? data.candidates.map(candidateCard).join("")
+
+    // Segment by day, group by ticker within each day, best composite first.
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const yesterdayKey = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+    const dayLabel = k => k === todayKey ? "Today" : k === yesterdayKey ? "Yesterday"
+      : new Date(k + "T12:00:00Z").toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+
+    const days = new Map();
+    for (const c of data.candidates) {
+      const k = (c.scored_at_utc || "").slice(0, 10);
+      if (!days.has(k)) days.set(k, new Map());
+      const tickers = days.get(k);
+      if (!tickers.has(c.ticker)) tickers.set(c.ticker, []);
+      tickers.get(c.ticker).push(c);
+    }
+    const sections = [];
+    for (const [k, tickers] of days) {
+      const groups = [...tickers.values()]
+        .sort((a, b) => Math.max(...b.map(c => c.composite)) - Math.max(...a.map(c => c.composite)));
+      sections.push(`<section class="day">
+        <h2 class="sec">${dayLabel(k)}</h2>
+        <div class="cards">${groups.map(tickerCard).join("")}</div>
+      </section>`);
+    }
+    $("#sections").innerHTML = sections.length ? sections.join("")
       : '<div class="empty">Nothing here yet — vetted picks appear after the next scan.</div>';
+    stagger();
+
+    $("#search").addEventListener("input", e => {
+      const q = e.target.value.trim().toLowerCase();
+      for (const card of document.querySelectorAll(".card[data-search]"))
+        card.style.display = !q || card.dataset.search.includes(q) ? "" : "none";
+      for (const sec of document.querySelectorAll("section.day")) {
+        const any = [...sec.querySelectorAll(".card")].some(c => c.style.display !== "none");
+        sec.style.display = any ? "" : "none";
+      }
+    });
   },
 
   async tracker() {
@@ -91,6 +152,7 @@ const pages = {
       <td class="num ${r.return_pct > 0 ? "ok" : r.return_pct < 0 ? "bad" : ""}">${fmtPct(r.return_pct)}</td>
       <td>${esc(r.method)}</td><td>${when(r.graded_at)}</td></tr>`).join("")
       : '<tr><td colspan="6" class="empty">Nothing resolved yet.</td></tr>';
+    stagger();
   },
 
   async cramer() {
@@ -108,6 +170,7 @@ const pages = {
       <td>${m.verdict ? `<span class="vbadge ${m.verdict === "HIT" ? "ok" : m.verdict === "MISS" ? "bad" : "mid"}">${m.verdict}</span> <span class="num">α ${fmtPct(m.alpha_pct)}</span>` : "open"}</td>
       <td>${esc(m.quote)}</td></tr>`).join("")
       : '<tr><td colspan="5" class="empty">No mentions yet.</td></tr>';
+    stagger();
   },
 
   async data() {
@@ -117,17 +180,39 @@ const pages = {
       if ($("#f-ticker").value) q.set("ticker", $("#f-ticker").value);
       if ($("#f-min").value) q.set("min_composite", $("#f-min").value);
       const d = await api(`/api/candidates?${q}`);
-      $("#rows").innerHTML = d.candidates.length ? d.candidates.map(c => `<tr>
-        <td>${when(c.scored_at_utc)}</td><td class="num"><b>${esc(c.ticker)}</b></td>
+      const row = (c, extra = "", cls = "") => `<tr class="${cls}">
+        <td>${when(c.scored_at_utc)}</td>
+        <td class="num">${cls ? "" : '<span class="chev"></span>'}<b>${esc(c.ticker)}</b>${extra}</td>
         <td class="num ${scoreClass(c.composite)}"><b>${Number(c.composite).toFixed(2)}</b></td>
         <td class="num">${c.thesis}/${c.community}/${c.news}/${c.technical}</td>
         <td>${c.posted ? '<span class="badge">posted</span>' : c.radar ? '<span class="badge radar">radar</span>' : ""}</td>
         <td>r/${esc(c.subreddit)}</td>
         <td>${esc((c.briefing || "").slice(0, 140))}${(c.briefing || "").length > 140 ? "…" : ""}</td>
-        <td><a href="${esc(c.url)}" target="_blank" rel="noopener">↗</a></td></tr>`).join("")
-        : '<tr><td colspan="8" class="empty">No rows for this filter.</td></tr>';
-      $("#count").textContent = `${d.candidates.length} rows`;
+        <td><a href="${esc(c.url)}" target="_blank" rel="noopener">↗</a></td></tr>`;
+
+      // One surfaced row per ticker (latest post); older posts expand below it.
+      const groups = new Map();
+      for (const c of d.candidates) {
+        if (!groups.has(c.ticker)) groups.set(c.ticker, []);
+        groups.get(c.ticker).push(c);
+      }
+      let html = "";
+      for (const rows of groups.values()) {
+        if (rows.length === 1) { html += row(rows[0]); continue; }
+        html += row(rows[0], ` <span class="badge momentum">×${rows.length}</span>`, "ghead");
+        html += rows.slice(1).map(c => row(c, "", "gchild")).join("");
+      }
+      $("#rows").innerHTML = html || '<tr><td colspan="8" class="empty">No rows for this filter.</td></tr>';
+      $("#count").textContent = `${groups.size} tickers · ${d.candidates.length} rows`;
     };
+    $("#rows").addEventListener("click", e => {
+      if (e.target.closest("a")) return;
+      const head = e.target.closest("tr.ghead");
+      if (!head) return;
+      const open = head.classList.toggle("open");
+      for (let el = head.nextElementSibling; el && el.classList.contains("gchild"); el = el.nextElementSibling)
+        el.classList.toggle("shown", open);
+    });
     $("#apply").addEventListener("click", load);
     await load();
   },

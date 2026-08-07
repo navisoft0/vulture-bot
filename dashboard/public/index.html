@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Vulture · Today</title>
+  <title>Vulture · Feed</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body data-page="today">
 <nav>
   <span class="brand">🦅 vulture<span class="dot">.</span></span>
-  <a id="nav-today" href="/">Today</a>
+  <a id="nav-today" href="/">Feed</a>
   <a id="nav-tracker" href="/tracker.html">Tracker</a>
   <a id="nav-cramer" href="/cramer.html">Cramer</a>
   <a id="nav-data" href="/data.html">Data</a>
@@ -17,9 +17,12 @@
   <span class="me" id="me">…</span>
 </nav>
 <main>
-  <h1>Today<span class="dot">.</span></h1>
+  <h1>Feed<span class="dot">.</span></h1>
   <div class="sub"><span id="scan-info">Loading…</span> · <a id="toggle-all" href="?all=1">show everything scored</a></div>
-  <div class="cards" id="cards"></div>
+  <div class="controls">
+    <input id="search" type="search" placeholder="filter — ticker, text, subreddit…" autocomplete="off">
+  </div>
+  <div id="sections"></div>
 </main>
 <script src="/app.js"></script>
 </body>

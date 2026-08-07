@@ -23,10 +23,40 @@
 * { box-sizing: border-box; margin: 0; }
 ::selection { background: var(--accent-strong); color: #fff; }
 
+/* Cross-fade between pages (browsers without View Transitions just navigate). */
+@view-transition { navigation: auto; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.18s; }
+
 body {
   background: var(--bg); color: var(--text);
   font: 15px/1.55 var(--sans);
+  min-height: 100vh;
 }
+
+/* Ambient glow — two slow-drifting blobs, barely-there. */
+body::before, body::after {
+  content: ""; position: fixed; z-index: -1; border-radius: 50%;
+  filter: blur(110px); pointer-events: none;
+}
+body::before {
+  width: 620px; height: 620px; top: -240px; right: -160px;
+  background: var(--accent-strong); opacity: 0.07;
+  animation: drift-a 36s ease-in-out infinite alternate;
+}
+body::after {
+  width: 520px; height: 520px; bottom: -240px; left: -140px;
+  background: var(--bull); opacity: 0.05;
+  animation: drift-b 44s ease-in-out infinite alternate;
+}
+@keyframes drift-a { to { transform: translate(-90px, 70px) scale(1.12); } }
+@keyframes drift-b { to { transform: translate(100px, -60px) scale(1.08); } }
+
+/* Entrance: cards/tiles rise in with a small stagger (--i set by app.js). */
+.cards .card, .tiles .tile {
+  animation: rise 0.35s ease both;
+  animation-delay: calc(var(--i, 0) * 35ms);
+}
+@keyframes rise { from { opacity: 0; transform: translateY(9px); } }
 
 a { color: var(--accent); text-decoration: none; transition: color 0.15s; }
 a:hover { color: #c4b0fc; text-decoration: underline; text-underline-offset: 3px; }
@@ -149,6 +179,26 @@ h2.sec {
 .flags::before { content: "⚠ "; }
 .meta { color: var(--muted); font-size: 12px; margin-top: 12px; }
 
+details.sources { margin-top: 12px; }
+details.sources summary {
+  cursor: pointer; list-style: none; user-select: none;
+  font-family: var(--mono); font-size: 11.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent);
+}
+details.sources summary::-webkit-details-marker { display: none; }
+details.sources summary::before {
+  content: "▸"; display: inline-block; margin-right: 6px;
+  transition: transform 0.15s;
+}
+details.sources[open] summary::before { transform: rotate(90deg); }
+details.sources ul { margin: 8px 0 0; padding: 0; list-style: none; }
+details.sources li {
+  padding: 5px 0; border-top: 1px dashed var(--line);
+  font-size: 12.5px; color: var(--muted);
+}
+
+section.day { margin-bottom: 10px; }
+
 /* ---- tables ---------------------------------------------------------- */
 
 .tablewrap {
@@ -171,6 +221,18 @@ td.hi { color: var(--bull); }
 td.med { color: var(--amber); }
 td.low { color: var(--muted); }
 
+/* Grouped ticker rows on the Data page */
+tr.ghead { cursor: pointer; }
+tr.ghead .chev {
+  display: inline-block; width: 14px; color: var(--muted);
+  transition: transform 0.15s;
+}
+tr.ghead .chev::before { content: "▸"; }
+tr.ghead.open .chev { transform: rotate(90deg); }
+tr.gchild { display: none; }
+tr.gchild.shown { display: table-row; background: rgba(255, 255, 255, 0.015); }
+tr.gchild td:first-child { padding-left: 26px; }
+
 .vbadge {
   font-family: var(--mono); font-size: 11px; font-weight: 700;
   letter-spacing: 0.06em; padding: 2px 8px; border-radius: 4px;
@@ -190,6 +252,7 @@ input, select, button {
   transition: border-color 0.15s;
 }
 input::placeholder { color: var(--muted); }
+input[type="search"] { width: min(420px, 100%); }
 input:hover, select:hover { border-color: var(--line-bright); }
 input:focus, select:focus { border-color: var(--accent); outline: none; }
 
@@ -229,6 +292,7 @@ button.primary:disabled { opacity: 0.45; cursor: default; transform: none; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 @media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; }
+  * { transition: none !important; animation: none !important; }
   .tile:hover, .card:hover { transform: none; }
+  ::view-transition-old(root), ::view-transition-new(root) { animation: none !important; }
 }

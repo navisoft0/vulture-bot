@@ -56,13 +56,25 @@ async function ingestScan(request, env) {
            c.post_created_utc || "", c.scored_at_utc).run();
     const candidateId = res.meta.last_row_id;
     for (const p of c.plays || []) {
+      // One open promoted play per ticker+direction: if an ungraded promoted
+      // play for this thesis already exists, keep the new one un-promoted so
+      // duplicate mentions don't inflate the tracker/hit rate.
+      let promoted = c.posted ? 1 : 0;
+      if (promoted) {
+        const dup = await env.DB.prepare(
+          `SELECT p.id FROM plays p LEFT JOIN play_results r ON r.play_id = p.id
+           WHERE p.promoted = 1 AND r.play_id IS NULL
+             AND p.ticker = ? AND IFNULL(p.direction, '') = ? LIMIT 1`
+        ).bind(c.ticker, p.direction || "").first();
+        if (dup) promoted = 0;
+      }
       await env.DB.prepare(
         `INSERT INTO plays (candidate_id, ticker, direction, structure, strike, expiry,
            rationale, promoted, promoted_at)
          VALUES (?,?,?,?,?,?,?,?,?)`
       ).bind(candidateId, c.ticker, p.direction || null, p.structure || null,
              p.strike ?? null, p.expiry || null, p.rationale || "",
-             c.posted ? 1 : 0, c.posted ? c.scored_at_utc : null).run();
+             promoted, promoted ? c.scored_at_utc : null).run();
     }
   }
   return json({ ok: true });
@@ -142,6 +154,30 @@ async function apiToday(env, url) {
       `SELECT * FROM plays WHERE candidate_id = ?`).bind(c.id).all();
     c.plays = plays;
   }
+  return json({ scan, candidates });
+}
+
+async function apiOverview(env, url) {
+  const days = Math.min(parseInt(url.searchParams.get("days") || "14", 10), 30);
+  const all = url.searchParams.get("all") === "1";
+  const since = new Date(Date.now() - days * 864e5).toISOString();
+  const scan = await env.DB.prepare(
+    `SELECT * FROM scans ORDER BY started_at DESC LIMIT 1`).first();
+  const filter = all ? "" : "AND (posted = 1 OR radar = 1)";
+  const { results: candidates } = await env.DB.prepare(
+    `SELECT * FROM candidates WHERE scored_at_utc >= ? ${filter}
+     ORDER BY scored_at_utc DESC LIMIT 400`).bind(since).all();
+  // Batch-attach plays (chunked: D1 caps bound params per statement).
+  const byCand = {};
+  const ids = candidates.map(c => c.id);
+  for (let i = 0; i < ids.length; i += 90) {
+    const chunk = ids.slice(i, i + 90);
+    const { results: plays } = await env.DB.prepare(
+      `SELECT * FROM plays WHERE candidate_id IN (${chunk.map(() => "?").join(",")})`
+    ).bind(...chunk).all();
+    for (const p of plays) (byCand[p.candidate_id] ??= []).push(p);
+  }
+  for (const c of candidates) c.plays = byCand[c.id] || [];
   return json({ scan, candidates });
 }
 
@@ -381,6 +417,7 @@ export default {
 
     if (path === "/api/me") return json({ email, admin });
     if (path === "/api/today") return apiToday(env, url);
+    if (path === "/api/overview") return apiOverview(env, url);
     if (path === "/api/candidates") return apiCandidates(env, url);
     if (path === "/api/tracker") return apiTracker(env);
     if (path === "/api/cramer") return apiCramer(env);
