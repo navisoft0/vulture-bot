@@ -60,6 +60,19 @@ function tickerCard(group) {
     : `<details class="sources"><summary>${group.length} sources</summary>
         <ul>${byConviction.map(s => `<li>${source(s)}</li>`).join("")}</ul></details>`;
 
+  // Short line: newest post that carries a one-liner (its briefing is the
+  // running story); legacy rows fall back to the lead briefing's first sentence.
+  const newest = group.find(c => c.briefing_short) || lead;
+  const shortLine = newest.briefing_short
+    || (lead.briefing || "").split(/(?<=[.!?])\s/)[0];
+  const withText = byConviction.filter(c => c.briefing);
+  const analysis = `<details class="sources analysis"><summary>full analysis</summary>
+      <div class="analysis-body">${withText.map(c => `
+        <div class="analysis-src">
+          <div class="analysis-meta">${source(c)}</div>
+          <p>${esc(c.briefing)}</p>
+        </div>`).join("")}</div></details>`;
+
   const search = esc([lead.ticker, ...group.map(c => c.briefing), ...group.map(c => c.subreddit)]
     .join(" ").toLowerCase());
   return `<div class="card ${scoreClass(lead.composite)}" data-search="${search}">
@@ -72,9 +85,10 @@ function tickerCard(group) {
       <span>thesis <b>${lead.thesis}</b></span><span>community <b>${lead.community}</b></span>
       <span>news <b>${lead.news}</b></span><span>technicals <b>${lead.technical}</b></span>
     </div>
-    <div class="brief">${esc(lead.briefing)}</div>
+    <div class="brief">${esc(shortLine)}</div>
     ${plays.length ? `<ul class="plays">${plays.join("")}</ul>` : ""}
     ${flags ? `<div class="flags">${esc(flags)}</div>` : ""}
+    ${withText.length ? analysis : ""}
     ${sources}
   </div>`;
 }

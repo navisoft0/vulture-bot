@@ -21,8 +21,12 @@ log = logging.getLogger(__name__)
 _COL_TICKER = 1
 _COL_COMPOSITE = 2
 _COL_POSTED = 8
+_COL_BRIEFING = 9
 _COL_SUBREDDIT = 13
 _COL_SCORED_AT = 15
+
+#: Prior briefings kept per ticker for the cumulative-analysis prompt block.
+_MAX_PRIOR_BRIEFINGS = 3
 
 #: Bonus by number of PRIOR mentions in the window (1 prior -> 2nd mention now).
 _BONUS_BY_PRIOR = {1: 0.4, 2: 0.7}
@@ -37,6 +41,17 @@ class MentionHistory:
     subreddits: set = field(default_factory=set)
     last_posted_at: datetime | None = None
     last_posted_composite: float | None = None
+    #: Newest-first (scored_at, subreddit, briefing) of recent prior mentions.
+    briefings: list = field(default_factory=list)
+
+    def prior_block(self) -> str | None:
+        """Prompt section summarizing recent prior mentions, or None."""
+        if not self.briefings:
+            return None
+        return "\n".join(
+            f"- [{ts:%b %d %H:%M} UTC, r/{sub}] {text}"
+            for ts, sub, text in self.briefings[:_MAX_PRIOR_BRIEFINGS]
+        )
 
 
 def _parse_ts(value: str) -> datetime | None:
@@ -69,6 +84,11 @@ def load_history(window_hours: int | None = None) -> dict[str, MentionHistory]:
         h.count += 1
         if row[_COL_SUBREDDIT].strip():
             h.subreddits.add(row[_COL_SUBREDDIT].strip())
+        if len(row) > _COL_BRIEFING and row[_COL_BRIEFING].strip():
+            h.briefings.append((scored_at, row[_COL_SUBREDDIT].strip() or "?",
+                                row[_COL_BRIEFING].strip()[:400]))
+            h.briefings.sort(key=lambda b: b[0], reverse=True)
+            del h.briefings[_MAX_PRIOR_BRIEFINGS:]
         if row[_COL_POSTED].strip().upper() == "TRUE":
             try:
                 comp = float(row[_COL_COMPOSITE])

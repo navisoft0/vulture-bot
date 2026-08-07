@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS candidates (
   radar           INTEGER DEFAULT 0,
   posted          INTEGER DEFAULT 0,
   briefing        TEXT,
+  briefing_short  TEXT,
   red_flags       TEXT,
   url             TEXT,
   subreddit       TEXT,

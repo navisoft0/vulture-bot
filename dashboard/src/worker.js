@@ -47,13 +47,13 @@ async function ingestScan(request, env) {
     const res = await env.DB.prepare(
       `INSERT INTO candidates (scan_id, post_id, ticker, composite, thesis, community,
          news, technical, cross_platform, prior_mentions, momentum_bonus, radar, posted,
-         briefing, red_flags, url, subreddit, post_created_utc, scored_at_utc)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         briefing, briefing_short, red_flags, url, subreddit, post_created_utc, scored_at_utc)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(s.id, c.post_id, c.ticker, c.composite, c.thesis, c.community, c.news,
            c.technical, c.cross_platform ? 1 : 0, c.prior_mentions || 0,
            c.momentum_bonus || 0, c.radar ? 1 : 0, c.posted ? 1 : 0,
-           c.briefing || "", c.red_flags || "", c.url || "", c.subreddit || "",
-           c.post_created_utc || "", c.scored_at_utc).run();
+           c.briefing || "", c.briefing_short || "", c.red_flags || "", c.url || "",
+           c.subreddit || "", c.post_created_utc || "", c.scored_at_utc).run();
     const candidateId = res.meta.last_row_id;
     for (const p of c.plays || []) {
       // One open promoted play per ticker+direction: if an ungraded promoted

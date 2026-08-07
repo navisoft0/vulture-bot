@@ -43,7 +43,8 @@ class TickerScore(BaseModel):
     news_catalyst: float = Field(ge=0, le=10)
     technical_setup: float = Field(ge=0, le=10)
     plays_discussed: list[OptionPlay]
-    briefing: str = Field(description="Synthesized thesis + community reaction, 2-4 sentences")
+    briefing_short: str = Field(description="One sentence, ~15 words max: the core callout — setup + catalyst in plain words")
+    briefing: str = Field(description="Synthesized thesis + community reaction, 2-4 sentences; cumulative across prior mentions when supplied")
     red_flags: list[str]
 
 
@@ -162,6 +163,17 @@ direction, structure (calls/puts/spreads/shares), strike as a number, and expiry
 normalized to YYYY-MM-DD when determinable (current date is provided). Only include
 plays actually discussed — do not invent your own.
 
+briefing_short — ONE punchy sentence (~15 words): what the callout is and why now.
+No filler ("this post discusses…"), no hedging boilerplate. A member should get
+the gist from this line alone.
+
+briefing — 2-4 sentences: thesis, mechanism, and how the community received it.
+If a "Prior recent mentions" section is supplied, this is the RUNNING STORY of
+the ticker, not a review of this post alone: fold the prior mentions' context
+in, note what this post adds or changes (accelerating attention, new evidence,
+shifting sentiment), and drop anything the priors already said that this post
+contradicts.
+
 red_flags — AT MOST 3, integrity disqualifiers only. Flag: evidence of coordinated
 pumping (copy-paste shill comments, brand-new accounts pushing), fabricated-looking
 numbers, or claims of fact the supplied data proves false. Do NOT flag anything a
@@ -179,7 +191,8 @@ Rules:
 
 
 def build_scoring_prompt(post: dict, comments: str, market_block: str | None,
-                         stocktwits_block: str | None, today: str) -> str:
+                         stocktwits_block: str | None, today: str,
+                         prior_block: str | None = None) -> str:
     sections = [
         f"Current date: {today}",
         f"**Post title:** {post['title']}",
@@ -190,6 +203,8 @@ def build_scoring_prompt(post: dict, comments: str, market_block: str | None,
                     else "**Market data:** none supplied")
     if stocktwits_block:
         sections.append(f"**Stocktwits:**\n{stocktwits_block}")
+    if prior_block:
+        sections.append(f"**Prior recent mentions (same ticker, earlier posts):**\n{prior_block}")
     return "\n\n".join(sections)
 
 

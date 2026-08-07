@@ -140,6 +140,10 @@ def run_scan(trigger: str = "cron") -> None:
     market = clients.market_client()
     st_stats_cache: dict[str, dict | None] = {}
 
+    # Momentum history (prior runs, from the Sheet log) — needed in phase 1 so
+    # scoring prompts can carry prior-mention briefings for cumulative analysis.
+    history = momentum.load_history()
+
     newly_processed: list[str] = []
 
     # Phase 1: enrich and build scoring jobs (Reddit + Massive bound).
@@ -172,6 +176,7 @@ def run_scan(trigger: str = "cron") -> None:
                 st_stats_cache[enriched_sym] = stocktwits.symbol_stats(enriched_sym)
 
         comments = reddit.get_comments(post["id"])
+        hist = history.get(enriched_sym) if enriched_sym else None
         prompt = analysis.build_scoring_prompt(
             post, comments,
             market_block=_market_block(company, bar, rsi_val, bars30, sma50, news, market),
@@ -179,6 +184,7 @@ def run_scan(trigger: str = "cron") -> None:
                 st_stats_cache.get(enriched_sym), enriched_sym in trending
             ) if enriched_sym else None,
             today=today,
+            prior_block=hist.prior_block() if hist else None,
         )
         jobs.append({"id": post["id"], "prompt": prompt})
         context[post["id"]] = {
@@ -196,9 +202,7 @@ def run_scan(trigger: str = "cron") -> None:
     # Phase 2: score (Batches API when enabled — 50% cheaper; sync fallback).
     results = analysis.score_many(jobs)
 
-    # Phase 3: post-process scores. Momentum history comes from the Sheet log
-    # of prior runs (read before this run's rows are appended).
-    history = momentum.load_history()
+    # Phase 3: post-process scores against the pre-run momentum history.
     scored: list[ScoredCandidate] = []
     for post_id, ts in results.items():
         if ts.ticker in ("N/A", ""):
@@ -273,7 +277,8 @@ def run_scan(trigger: str = "cron") -> None:
             "news": c.score.news_catalyst, "technical": c.score.technical_setup,
             "cross_platform": c.cross_platform, "prior_mentions": c.prior_mentions,
             "momentum_bonus": c.momentum_bonus, "radar": c.radar, "posted": c.posted,
-            "briefing": c.score.briefing, "red_flags": "; ".join(c.score.red_flags),
+            "briefing": c.score.briefing, "briefing_short": c.score.briefing_short,
+            "red_flags": "; ".join(c.score.red_flags),
             "url": c.post["url"], "subreddit": c.post["subreddit"],
             "post_created_utc": c.post["created_utc"], "scored_at_utc": now,
             "plays": [p.model_dump() for p in c.score.plays_discussed],
