@@ -8,26 +8,26 @@
 </head>
 <body data-page="admin">
 <nav>
-  <span class="brand">🦅 Vulture</span>
+  <span class="brand">🦅 vulture<span class="dot">.</span></span>
   <a id="nav-today" href="/">Today</a>
-  <a id="nav-tracker" href="/tracker.html">Play Tracker</a>
+  <a id="nav-tracker" href="/tracker.html">Tracker</a>
   <a id="nav-cramer" href="/cramer.html">Cramer</a>
   <a id="nav-data" href="/data.html">Data</a>
   <a id="nav-admin" href="/admin.html" style="display:none">Admin</a>
   <span class="me" id="me">…</span>
 </nav>
 <main>
-  <h1>Admin</h1>
+  <h1>Admin<span class="dot">.</span></h1>
   <div class="sub">Super-admin controls. Actions here hit the live engine.</div>
-  <div class="card" style="margin-bottom:14px">
-    <h2 style="font-size:16px;margin-bottom:8px">Run a scan now</h2>
-    <p class="sub" style="margin-bottom:10px">Triggers the Railway engine immediately (falls back to a queue the engine polls).</p>
-    <button class="primary" id="run-btn">▶ Run Now</button> <span id="run-status"></span>
+  <div class="panel">
+    <h2>Run a scan now</h2>
+    <p>Triggers the Railway engine immediately (falls back to a queue the engine polls).</p>
+    <button class="primary" id="run-btn">▶ Run now</button><span class="status" id="run-status"></span>
   </div>
-  <div class="card">
-    <h2 style="font-size:16px;margin-bottom:8px">Archive &amp; prune</h2>
-    <p class="sub" style="margin-bottom:10px">Runs the retention job now: rows older than the retention window export to R2, then delete. Open plays survive.</p>
-    <button class="primary" id="export-btn">🗄️ Export &amp; prune</button> <span id="export-status"></span>
+  <div class="panel">
+    <h2>Archive &amp; prune</h2>
+    <p>Runs the retention job now: rows older than the retention window export to R2, then delete. Open plays survive.</p>
+    <button class="primary" id="export-btn">Export &amp; prune</button><span class="status" id="export-status"></span>
   </div>
 </main>
 <script src="/app.js"></script>
