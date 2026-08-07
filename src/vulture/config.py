@@ -18,7 +18,8 @@ TARGET_SUBREDDITS = [
     s.strip()
     for s in os.getenv(
         "TARGET_SUBREDDITS",
-        "wallstreetbets,shortsqueeze,WallStreetbetsELITE,smallstreetbets",
+        "wallstreetbets,shortsqueeze,WallStreetbetsELITE,smallstreetbets,"
+        "TheRaceTo10Million,10xPennyStocks",
     ).split(",")
     if s.strip()
 ]
