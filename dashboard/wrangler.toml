@@ -3,6 +3,11 @@ name = "vulture-dashboard"
 main = "src/worker.js"
 compatibility_date = "2026-06-01"
 
+# Public hostname (creates the DNS record on deploy)
+routes = [
+  { pattern = "vulture.navisoft.dev", custom_domain = true }
+]
+
 # Static frontend (served by the same Worker)
 [assets]
 directory = "public"
@@ -13,7 +18,7 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "vulture"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "104c17f7-ff75-43b9-af07-1865dceb4baf"
 
 # R2 archive bucket — create with: wrangler r2 bucket create vulture-archive
 [[r2_buckets]]
@@ -30,6 +35,6 @@ crons = ["0 6 1 * *"]
 #   RUN_URL           e.g. https://<railway-app>.up.railway.app/run
 #   DISCORD_ARCHIVE_WEBHOOK   (optional) webhook for archive links
 [vars]
-ADMIN_EMAILS = "you@example.com"          # comma-separated
+ADMIN_EMAILS = "gonavisoftware@gmail.com"  # comma-separated
 RETENTION_DAYS = "90"
 # DEV_MODE = "1"                          # local dev only: skips Access auth

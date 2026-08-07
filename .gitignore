@@ -6,3 +6,4 @@ vulture_cred.env
 *.egg-info/
 dashboard/.wrangler/
 dashboard/node_modules/
+dashboard/.dev.vars
