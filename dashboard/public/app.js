@@ -55,22 +55,20 @@ function tickerCard(group) {
 
   const source = s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">r/${esc(s.subreddit)} ↗</a>
       · <span class="num">${Number(s.composite).toFixed(1)}</span> · ${when(s.scored_at_utc)}`;
-  const sources = group.length === 1
-    ? `<div class="meta">scored ${when(lead.scored_at_utc)} · ${source(lead)}</div>`
-    : `<details class="sources"><summary>${group.length} sources</summary>
-        <ul>${byConviction.map(s => `<li>${source(s)}</li>`).join("")}</ul></details>`;
 
   // Short line: newest post that carries a one-liner (its briefing is the
   // running story); legacy rows fall back to the lead briefing's first sentence.
   const newest = group.find(c => c.briefing_short) || lead;
   const shortLine = newest.briefing_short
     || (lead.briefing || "").split(/(?<=[.!?])\s/)[0];
+  // One expander does it all: each source's link + its synthesized debrief.
   const withText = byConviction.filter(c => c.briefing);
-  const analysis = `<details class="sources analysis"><summary>full analysis</summary>
-      <div class="analysis-body">${withText.map(c => `
+  const analysis = `<details class="sources analysis">
+      <summary>full analysis${group.length > 1 ? ` · ${group.length} sources` : ""}</summary>
+      <div class="analysis-body">${byConviction.map(c => `
         <div class="analysis-src">
           <div class="analysis-meta">${source(c)}</div>
-          <p>${esc(c.briefing)}</p>
+          ${c.briefing ? `<p>${esc(c.briefing)}</p>` : ""}
         </div>`).join("")}</div></details>`;
 
   const search = esc([lead.ticker, ...group.map(c => c.briefing), ...group.map(c => c.subreddit)]
@@ -88,8 +86,8 @@ function tickerCard(group) {
     <div class="brief">${esc(shortLine)}</div>
     ${plays.length ? `<ul class="plays">${plays.join("")}</ul>` : ""}
     ${flags ? `<div class="flags">${esc(flags)}</div>` : ""}
-    ${withText.length ? analysis : ""}
-    ${sources}
+    ${withText.length ? analysis
+      : `<div class="meta">scored ${when(lead.scored_at_utc)} · ${source(lead)}</div>`}
   </div>`;
 }
 
