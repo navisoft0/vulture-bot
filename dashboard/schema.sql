@@ -29,7 +29,13 @@ CREATE TABLE IF NOT EXISTS candidates (
   url             TEXT,
   subreddit       TEXT,
   post_created_utc TEXT,
-  scored_at_utc   TEXT NOT NULL
+  scored_at_utc   TEXT NOT NULL,
+  -- Card-face extras (engine-computed; nullable, added 2026-08):
+  -- existing DBs migrate with ALTER TABLE candidates ADD COLUMN <name> <type>;
+  earnings_date   TEXT,
+  earnings_em     REAL,                   -- expected move % (ATM straddle)
+  ma_w50          REAL, ma_w200 REAL,     -- weekly 50/200 SMA
+  ma_4h50         REAL, ma_4h200 REAL     -- 4-hour 50/200 SMA
 );
 CREATE INDEX IF NOT EXISTS idx_candidates_scored ON candidates(scored_at_utc);
 CREATE INDEX IF NOT EXISTS idx_candidates_ticker ON candidates(ticker);

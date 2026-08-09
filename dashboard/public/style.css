@@ -334,6 +334,7 @@ section.day { margin-bottom: 10px; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .st-tile .v { font-family: var(--mono); font-size: 17px; font-weight: 600; margin-top: 2px; }
+.st-tile .v.sm { font-size: 14.5px; }
 .st-tile .v.ok { color: var(--bull); }
 .st-tile .v.bad { color: var(--bear); }
 .st-tile .v.mid { color: var(--amber); }

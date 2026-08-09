@@ -184,6 +184,33 @@ class MarketData:
         except Exception:
             return None
 
+    def sma_weekly(self, symbol: str, window: int) -> float | None:
+        """Latest weekly simple moving average (e.g. 50W / 200W)."""
+        result = self._call(
+            ("sma_w", symbol, window),
+            self._client.get_sma,
+            ticker=symbol, timespan="week", window=window, series_type="close", limit=1,
+        )
+        try:
+            values = getattr(result, "values", None) or []
+            return round(values[0].value, 2) if values else None
+        except Exception:
+            return None
+
+    def sma_4h(self, symbol: str, windows: tuple[int, ...] = (50, 200)) -> dict[int, float]:
+        """SMAs over 4-hour bars, {window: value}; windows without enough bars
+        are omitted. Bars are clock-aligned and include extended hours, so
+        values differ slightly from session-aligned charting apps."""
+        def fetch():
+            end = date.today()
+            start = end - timedelta(days=130)  # ~350 4h bars: covers a 200 MA
+            return self._client.get_aggs(symbol, 4, "hour", start.isoformat(),
+                                         end.isoformat(), limit=50000)
+
+        bars = self._call(("aggs4h", symbol), fetch) or []
+        closes = [b.close for b in bars if getattr(b, "close", None) is not None]
+        return {w: round(sum(closes[-w:]) / w, 2) for w in windows if len(closes) >= w}
+
     def recent_news(self, symbol: str, hours: int = 48, limit: int = 5) -> list[dict]:
         """Recent headlines for `symbol` (hourly-updated feed, free tier)."""
         def fetch():

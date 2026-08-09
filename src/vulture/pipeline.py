@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from . import analysis, clients, config, momentum, notify, scoring, sheets, state, store
+from . import analysis, clients, config, earnings, momentum, notify, scoring, sheets, state, store
 from .analysis import TickerScore
 from .signals import reddit, stocktwits
 
@@ -112,6 +112,19 @@ def _stocktwits_block(stats: dict | None, trending: bool,
                 f"{stats['bullish']} tagged Bullish, {stats['bearish']} tagged Bearish."
             )
     return "\n".join(parts) or None
+
+
+def _card_extras(sym: str, market) -> dict:
+    """MA + earnings fields for dashboard card faces. Every source degrades
+    to None/absent; Massive calls are day-cached so repeat tickers are free."""
+    h4 = market.sma_4h(sym)
+    return {
+        "ma_w50": market.sma_weekly(sym, 50),
+        "ma_w200": market.sma_weekly(sym, 200),
+        "ma_4h50": h4.get(50),
+        "ma_4h200": h4.get(200),
+        **(earnings.snapshot(sym) or {}),
+    }
 
 
 def _infer_contract_type(structure: str) -> str | None:
@@ -321,6 +334,7 @@ def run_scan(trigger: str = "cron") -> None:
             "url": c.post["url"], "subreddit": c.post["subreddit"],
             "post_created_utc": c.post["created_utc"], "scored_at_utc": now,
             "plays": [p.model_dump() for p in c.score.plays_discussed],
+            **(_card_extras(c.score.ticker, market) if store.enabled() else {}),
         } for c in scored],
     )
 
@@ -394,6 +408,7 @@ def run_recheck(tickers: list[str]) -> None:
             "red_flags": "; ".join(ts.red_flags),
             "url": "", "subreddit": "", "post_created_utc": now, "scored_at_utc": now,
             "plays": [],  # plays stay owned by the original posts
+            **(_card_extras(sym, market) if store.enabled() else {}),
         })
         log.info("Re-checked %s at %.2f.", sym, comp)
 

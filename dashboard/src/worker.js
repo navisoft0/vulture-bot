@@ -47,13 +47,16 @@ async function ingestScan(request, env) {
     const res = await env.DB.prepare(
       `INSERT INTO candidates (scan_id, post_id, ticker, composite, thesis, community,
          news, technical, cross_platform, prior_mentions, momentum_bonus, radar, posted,
-         briefing, briefing_short, red_flags, url, subreddit, post_created_utc, scored_at_utc)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         briefing, briefing_short, red_flags, url, subreddit, post_created_utc, scored_at_utc,
+         earnings_date, earnings_em, ma_w50, ma_w200, ma_4h50, ma_4h200)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(s.id, c.post_id, c.ticker, c.composite, c.thesis, c.community, c.news,
            c.technical, c.cross_platform ? 1 : 0, c.prior_mentions || 0,
            c.momentum_bonus || 0, c.radar ? 1 : 0, c.posted ? 1 : 0,
            c.briefing || "", c.briefing_short || "", c.red_flags || "", c.url || "",
-           c.subreddit || "", c.post_created_utc || "", c.scored_at_utc).run();
+           c.subreddit || "", c.post_created_utc || "", c.scored_at_utc,
+           c.earnings_date ?? null, c.earnings_em_pct ?? null,
+           c.ma_w50 ?? null, c.ma_w200 ?? null, c.ma_4h50 ?? null, c.ma_4h200 ?? null).run();
     const candidateId = res.meta.last_row_id;
     for (const p of c.plays || []) {
       // One open promoted play per ticker+direction: if an ungraded promoted

@@ -32,6 +32,23 @@ function playLine(p) {
   return `${arrow} <span class="num">${esc(bits.join(" · "))}</span>${p.rationale ? " — " + esc(p.rationale) : ""}`;
 }
 
+/* MA + earnings tiles on scored-card fronts (engine-computed, nullable). */
+function extraTiles(group, lead) {
+  const ex = group.find(c => c.ma_w50 != null || c.ma_4h50 != null || c.earnings_date) || lead;
+  const money = v => v == null ? "—"
+    : `$${Number(v).toLocaleString([], { maximumFractionDigits: v >= 1000 ? 0 : 2 })}`;
+  const ma = (label, a, b) => a == null && b == null ? ""
+    : `<div class="st-tile"><div class="l">${label}</div>
+       <div class="v sm">${money(a)} · ${money(b)}</div></div>`;
+  const earn = !ex.earnings_date ? ""
+    : `<div class="st-tile wide"><div class="l">earnings</div>
+       <div class="v sm">${new Date(ex.earnings_date + "T12:00:00Z")
+         .toLocaleDateString([], { month: "short", day: "numeric" })}${
+         ex.earnings_em != null ? ` · expected move ±${Number(ex.earnings_em).toFixed(1)}%` : ""}</div></div>`;
+  return ma("1w ma 50 · 200", ex.ma_w50, ex.ma_w200)
+    + ma("4h ma 50 · 200", ex.ma_4h50, ex.ma_4h200) + earn;
+}
+
 /* Feed page state shared between renderer and event handlers. */
 const feedState = { follows: new Set(), checksPending: {}, batchMin: 10 };
 
@@ -99,6 +116,7 @@ function tickerCard(group) {
           <div class="v ${scoreCls === "hi" ? "ok" : scoreCls === "med" ? "mid" : ""}">${Number(lead.composite).toFixed(1)} / 10</div></div>
         <div class="st-tile" data-mkt-tile="${T}"><div class="l">rsi · volume</div>
           <div class="v mkt-side">·&thinsp;·&thinsp;·</div></div>
+        ${extraTiles(group, lead)}
       </div>
       <div class="brief">${esc(shortLine)}</div>
       <div class="st-foot">${when(lead.scored_at_utc)}${group.length > 1
