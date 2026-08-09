@@ -89,19 +89,24 @@ function tickerCard(group) {
    <div class="flip-inner">
     <div class="face card ${scoreCls}">
       <div class="head">
-        <span class="ticker">${T}</span>${scorePill}${badges.join(" ")}${star}
+        <span class="ticker">$${T}</span>${badges.join(" ")}${star}
+        <span class="st-right no-auto" data-mkt="${T}">
+          <span class="st-price mkt-price">·&thinsp;·&thinsp;·</span><span class="st-chg mkt-chg"></span>
+        </span>
       </div>
-      <div class="mkt" data-mkt="${T}">
-        <span class="mkt-price">·&thinsp;·&thinsp;·</span><span class="mkt-chg"></span>
-        <span class="mkt-side"></span>
+      <div class="st-tiles">
+        <div class="st-tile"><div class="l">vulture score</div>
+          <div class="v ${scoreCls === "hi" ? "ok" : scoreCls === "med" ? "mid" : ""}">${Number(lead.composite).toFixed(1)} / 10</div></div>
+        <div class="st-tile" data-mkt-tile="${T}"><div class="l">rsi · volume</div>
+          <div class="v mkt-side">·&thinsp;·&thinsp;·</div></div>
       </div>
       <div class="brief">${esc(shortLine)}</div>
-      <div class="meta">${when(lead.scored_at_utc)}${group.length > 1
+      <div class="st-foot">${when(lead.scored_at_utc)}${group.length > 1
         ? ` · ${group.length} sources` : ""}<span class="flip-hint">tap for analysis ⟲</span></div>
     </div>
     <div class="face back card ${scoreCls}">
       <div class="head">
-        <span class="ticker">${T}</span>${scorePill}
+        <span class="ticker">$${T}</span>${scorePill}
         <span class="back-label">full analysis</span>${star}
       </div>
       <div class="subscores">
@@ -129,29 +134,93 @@ function tickerCard(group) {
   </div>`;
 }
 
+/* Stocktwits trending card (from the routine snapshot). Front face mirrors
+   the Stocktwits pulse widget — price + change up top, stat tiles below;
+   back face carries the "why it's moving" driver line. */
+function trendingCard(s) {
+  const T = esc(s.symbol);
+  const label = l => l ? esc(String(l).replace(/_/g, " ").toLowerCase()
+    .replace(/\b\w/g, c => c.toUpperCase())) : "";
+  const sentiCls = /bull/i.test(s.sentiment_label || "") ? "ok"
+    : /bear/i.test(s.sentiment_label || "") ? "bad" : "mid";
+  const faceCls = sentiCls === "ok" ? "hi" : sentiCls === "bad" ? "st-bear" : "";
+  const price = s.price == null ? ""
+    : `<span class="st-price">$${Number(s.price).toLocaleString([], { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>`;
+  const chg = s.change_pct == null ? ""
+    : `<span class="st-chg ${s.change_pct > 0 ? "ok" : s.change_pct < 0 ? "bad" : ""}">${fmtPct(s.change_pct)}</span>`;
+  const pill = s.trending_rank != null
+    ? `<span class="trend-pill">🔥 #${Number(s.trending_rank)} trending</span>` : "";
+  const tiles = [
+    s.watchers != null ? `<div class="st-tile"><div class="l">watchers</div>
+        <div class="v">${Number(s.watchers).toLocaleString()}</div></div>` : "",
+    s.volume_score != null ? `<div class="st-tile"><div class="l">message volume</div>
+        <div class="v">${Number(s.volume_score)} · ${label(s.volume_label)}</div></div>` : "",
+    s.sentiment_score != null ? `<div class="st-tile wide"><div class="l">sentiment score</div>
+        <div class="v ${sentiCls}">${Number(s.sentiment_score)} · ${label(s.sentiment_label)}</div></div>` : "",
+  ].join("");
+  const search = esc([s.symbol, s.title, s.driver, "trending stocktwits"]
+    .filter(Boolean).join(" ").toLowerCase());
+
+  return `<div class="flip" data-search="${search}" data-ticker="${T}">
+   <div class="flip-inner">
+    <div class="face card st ${faceCls}">
+      <div class="head">
+        <span class="ticker">$${T}</span>
+        ${s.exchange ? `<span class="st-exch">${esc(s.exchange)}</span>` : ""}
+        ${pill}
+        <span class="st-right">${price}${chg}</span>
+      </div>
+      ${s.title ? `<div class="st-company">${esc(s.title)}</div>` : ""}
+      <div class="st-tiles">${tiles}</div>
+      <div class="st-foot">Powered by Stocktwits · not financial advice
+        <span class="flip-hint">tap for driver ⟲</span></div>
+    </div>
+    <div class="face back card st">
+      <div class="head">
+        <span class="ticker">$${T}</span>
+        <span class="back-label">why it's moving</span>
+      </div>
+      <div class="brief">${esc(s.driver || "No clear driver in the stream right now.")}</div>
+      ${s.bull_pct != null ? `<div class="meta">${Math.round(s.bull_pct)}% of tagged messages bullish</div>` : ""}
+      <div class="actions">
+        <a href="https://stocktwits.com/symbol/${T}" target="_blank" rel="noopener">open on Stocktwits ↗</a>
+        <span class="flip-hint">tap to flip back ⟲</span>
+      </div>
+    </div>
+   </div>
+  </div>`;
+}
+
 const fmtVol = v => v == null ? null : v >= 1e9 ? (v / 1e9).toFixed(1) + "B"
   : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : Math.round(v / 1e3) + "K";
 
-/* Fill every card's market strip from the quotes proxy (15-min delayed). */
+/* Fill every scored card's price block + market tile from the quotes proxy
+   (15-min delayed). Both are progressive enhancement: no quote, no block. */
 async function loadQuotes() {
   const strips = [...document.querySelectorAll("[data-mkt]")];
-  const tickers = [...new Set(strips.map(el => el.dataset.mkt))];
+  const tiles = [...document.querySelectorAll("[data-mkt-tile]")];
+  const tickers = [...new Set([...strips.map(el => el.dataset.mkt),
+                               ...tiles.map(el => el.dataset.mktTile)])];
   if (!tickers.length) return;
   let quotes = {};
   try { quotes = (await api(`/api/market/quotes?tickers=${tickers.join(",")}`)).quotes || {}; }
-  catch { /* market strip is progressive enhancement */ }
+  catch { /* market data is progressive enhancement */ }
   for (const el of strips) {
     const q = quotes[el.dataset.mkt];
     if (!q || q.price == null) { el.remove(); continue; }
     el.querySelector(".mkt-price").textContent = `$${Number(q.price).toLocaleString([], { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     const chg = el.querySelector(".mkt-chg");
     if (q.change_pct != null) {
-      chg.textContent = `${q.change_pct > 0 ? "▲" : q.change_pct < 0 ? "▼" : ""} ${fmtPct(q.change_pct)}`;
-      chg.className = `mkt-chg ${q.change_pct > 0 ? "ok" : q.change_pct < 0 ? "bad" : ""}`;
+      chg.textContent = fmtPct(q.change_pct);
+      chg.className = `st-chg mkt-chg ${q.change_pct > 0 ? "ok" : q.change_pct < 0 ? "bad" : ""}`;
     }
+  }
+  for (const tile of tiles) {
+    const q = quotes[tile.dataset.mktTile] || {};
     const side = [q.rsi != null ? `RSI ${q.rsi}` : null,
                   fmtVol(q.volume) ? `VOL ${fmtVol(q.volume)}` : null].filter(Boolean).join(" · ");
-    el.querySelector(".mkt-side").textContent = side;
+    if (side) tile.querySelector(".mkt-side").textContent = side;
+    else tile.remove();
   }
 }
 
@@ -209,8 +278,15 @@ const pages = {
         <div class="cards">${groups.map(tickerCard).join("")}</div>
       </section>`);
     }
-    $("#sections").innerHTML = sections.length ? sections.join("")
-      : '<div class="empty">Nothing here yet — vetted picks appear after the next scan.</div>';
+    // Trending strip (Stocktwits routine snapshot) sits above the scored feed.
+    // Rendered inside #sections so the delegated flip/search handlers apply.
+    const st = data.stocktwits;
+    const trendingHtml = st && st.symbols && st.symbols.length ? `<section class="day trending">
+        <h2 class="sec">Trending on Stocktwits · ${when(st.fetched_at)}</h2>
+        <div class="cards">${st.symbols.map(trendingCard).join("")}</div>
+      </section>` : "";
+    $("#sections").innerHTML = trendingHtml + (sections.length ? sections.join("")
+      : '<div class="empty">Nothing here yet — vetted picks appear after the next scan.</div>');
     renderFollowStrip();
     stagger();
     loadQuotes();
@@ -233,8 +309,10 @@ const pages = {
       inp.dispatchEvent(new Event("input"));
     });
 
-    // One delegated handler: stars, check buttons, and card flips.
+    // One delegated handler: section collapse, stars, check buttons, flips.
     $("#sections").addEventListener("click", async e => {
+      const sec = e.target.closest("section.day > h2.sec");
+      if (sec) { sec.parentElement.classList.toggle("collapsed"); return; }
       const star = e.target.closest(".star");
       if (star) {
         const t = star.dataset.ticker;

@@ -82,17 +82,35 @@ def _market_block(company: dict | None, bar: dict | None, rsi: float | None,
     return "\n".join(lines)
 
 
-def _stocktwits_block(stats: dict | None, trending: bool) -> str | None:
-    if stats is None and not trending:
-        return None
+def _stocktwits_block(stats: dict | None, trending: bool,
+                      pulse: dict | None = None) -> str | None:
+    """Prompt section from the routine snapshot (rich) or the scraper (coarse)."""
     parts = []
-    if trending:
-        parts.append("This ticker is currently on the Stocktwits trending list.")
-    if stats and stats["messages"]:
-        parts.append(
-            f"Last {stats['messages']} Stocktwits messages: "
-            f"{stats['bullish']} tagged Bullish, {stats['bearish']} tagged Bearish."
-        )
+    if pulse:
+        if pulse.get("sentiment_score") is not None:
+            bull = (f", {pulse['bull_pct']:.0f}% of tagged messages bullish"
+                    if pulse.get("bull_pct") is not None else "")
+            parts.append(f"Sentiment score {pulse['sentiment_score']}/100 "
+                         f"({pulse.get('sentiment_label') or '?'}){bull}.")
+        if pulse.get("volume_score") is not None:
+            parts.append(f"Message volume {pulse['volume_score']}/100 "
+                         f"({pulse.get('volume_label') or '?'}).")
+        if pulse.get("trending_rank"):
+            watchers = (f" · {pulse['watchers']:,} watchers"
+                        if pulse.get("watchers") else "")
+            parts.append(f"Trending on Stocktwits at rank #{pulse['trending_rank']}{watchers}.")
+        elif trending:
+            parts.append("This ticker is currently on the Stocktwits trending list.")
+        if pulse.get("driver"):
+            parts.append(f"Why it's moving, per the Stocktwits stream: {pulse['driver']}")
+    else:
+        if trending:
+            parts.append("This ticker is currently on the Stocktwits trending list.")
+        if stats and stats["messages"]:
+            parts.append(
+                f"Last {stats['messages']} Stocktwits messages: "
+                f"{stats['bullish']} tagged Bullish, {stats['bearish']} tagged Bearish."
+            )
     return "\n".join(parts) or None
 
 
@@ -142,7 +160,16 @@ def run_scan(trigger: str = "cron") -> None:
     posts.sort(key=lambda p: (p["score"], p["num_comments"]), reverse=True)
     posts = posts[: config.MAX_POSTS_PER_SCAN]
 
-    trending = set(stocktwits.trending_symbols()) if config.STOCKTWITS_ENABLED else set()
+    # Stocktwits: routine-written snapshot first (rich), scraping as fallback.
+    # Trending is the union of both — the snapshot covers the top ranks with
+    # rich data; the scraper list is longer and still feeds the flat bonus.
+    st_snapshot: dict[str, dict] = {}
+    trending: set[str] = set()
+    if config.STOCKTWITS_ENABLED:
+        st_snapshot = stocktwits.parse_snapshot(
+            store.stocktwits_snapshot(), config.STOCKTWITS_SNAPSHOT_MAX_AGE_MIN)
+        trending = ({t for t, e in st_snapshot.items() if e.get("trending_rank")}
+                    | set(stocktwits.trending_symbols()))
     market = clients.market_client()
     st_stats_cache: dict[str, dict | None] = {}
 
@@ -180,7 +207,9 @@ def run_scan(trigger: str = "cron") -> None:
             sma50 = market.sma(enriched_sym, window=50)
             news = market.recent_news(enriched_sym)
             snap = market.snapshot(enriched_sym)
-            if config.STOCKTWITS_ENABLED and enriched_sym not in st_stats_cache:
+            # Scrape per-symbol stats only for tickers the snapshot missed.
+            if (config.STOCKTWITS_ENABLED and enriched_sym not in st_snapshot
+                    and enriched_sym not in st_stats_cache):
                 st_stats_cache[enriched_sym] = stocktwits.symbol_stats(enriched_sym)
 
         comments = reddit.get_comments(post["id"])
@@ -190,7 +219,8 @@ def run_scan(trigger: str = "cron") -> None:
             market_block=_market_block(company, bar, rsi_val, bars30, sma50, news, market,
                                        snapshot=snap),
             stocktwits_block=_stocktwits_block(
-                st_stats_cache.get(enriched_sym), enriched_sym in trending
+                st_stats_cache.get(enriched_sym), enriched_sym in trending,
+                pulse=st_snapshot.get(enriched_sym),
             ) if enriched_sym else None,
             today=today,
             prior_block=hist.prior_block() if hist else None,
@@ -311,7 +341,13 @@ def run_recheck(tickers: list[str]) -> None:
 
     market = clients.market_client()
     history = momentum.load_history()
-    trending = set(stocktwits.trending_symbols()) if config.STOCKTWITS_ENABLED else set()
+    st_snapshot: dict[str, dict] = {}
+    trending: set[str] = set()
+    if config.STOCKTWITS_ENABLED:
+        st_snapshot = stocktwits.parse_snapshot(
+            store.stocktwits_snapshot(), config.STOCKTWITS_SNAPSHOT_MAX_AGE_MIN)
+        trending = ({t for t, e in st_snapshot.items() if e.get("trending_rank")}
+                    | set(stocktwits.trending_symbols()))
 
     jobs: list[dict] = []
     for raw in dict.fromkeys(t.upper() for t in tickers):
@@ -327,8 +363,9 @@ def run_recheck(tickers: list[str]) -> None:
         )
         hist = history.get(sym)
         st_block = _stocktwits_block(
-            stocktwits.symbol_stats(sym) if config.STOCKTWITS_ENABLED else None,
-            sym in trending)
+            stocktwits.symbol_stats(sym)
+            if config.STOCKTWITS_ENABLED and sym not in st_snapshot else None,
+            sym in trending, pulse=st_snapshot.get(sym))
         jobs.append({"id": sym, "prompt": analysis.build_recheck_prompt(
             sym, hist.prior_block() if hist else None, block, st_block, today)})
 

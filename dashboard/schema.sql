@@ -100,6 +100,15 @@ CREATE TABLE IF NOT EXISTS check_requests (
   picked_up_at TEXT
 );
 
+-- Latest Stocktwits snapshot, written by the scheduled Claude routine
+-- (MCP connector data: sentiment score, message volume, trending rank,
+-- driver text). Latest-only: one row, whole payload as JSON.
+CREATE TABLE IF NOT EXISTS stocktwits_snapshot (
+  id         INTEGER PRIMARY KEY CHECK (id = 1),
+  fetched_at TEXT NOT NULL,
+  payload    TEXT NOT NULL
+);
+
 -- Never-purged aggregates, updated during retention
 CREATE TABLE IF NOT EXISTS summary_totals (
   key   TEXT PRIMARY KEY,               -- e.g. plays_HIT, cramer_MISS

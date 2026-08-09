@@ -66,7 +66,10 @@ two services from this repo with cron schedules and start commands
 - **Rate limits:** all Massive calls go through a single throttle (~4.6/min)
   with a per-day cache; a scan surfacing ~8 new tickers uses ~8 minutes of
   rate-limit budget.
-- **Stocktwits** uses unofficial public endpoints and degrades gracefully —
-  if it breaks, the pipeline runs Reddit-only.
+- **Stocktwits** prefers a rich snapshot relayed through the dashboard by a
+  scheduled Claude routine (sentiment score, message volume, trending rank,
+  driver text — see `STOCKTWITS_ROUTINE.md`); when that's stale or absent it
+  falls back to unofficial public endpoints, and if those break too the
+  pipeline runs Reddit-only.
 - **State:** set `STATE_BACKEND=sheet` on hosts with ephemeral filesystems so
   redeploys don't re-post old plays.

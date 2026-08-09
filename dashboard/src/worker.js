@@ -110,6 +110,39 @@ async function ingestCramerVerdicts(request, env) {
   return json({ ok: true });
 }
 
+// ---------------------------------------------------------------------------
+// Stocktwits snapshot (Claude routine -> D1 -> engine)
+// ---------------------------------------------------------------------------
+
+async function ingestStocktwits(request, env) {
+  const body = await request.json();
+  if (!body.fetched_at || !Array.isArray(body.symbols)) {
+    return json({ error: "fetched_at and symbols[] required" }, 400);
+  }
+  await env.DB.prepare(
+    `INSERT OR REPLACE INTO stocktwits_snapshot (id, fetched_at, payload) VALUES (1, ?, ?)`
+  ).bind(body.fetched_at, JSON.stringify(body)).run();
+  return json({ ok: true, symbols: body.symbols.length });
+}
+
+async function apiStocktwitsSnapshot(env) {
+  const row = await env.DB.prepare(
+    `SELECT payload FROM stocktwits_snapshot WHERE id = 1`).first();
+  if (!row) return json({ fetched_at: null, symbols: [] });
+  return new Response(row.payload, { headers: JSON_HEADERS });
+}
+
+async function apiStocktwitsTargets(env) {
+  // Tickers vulture scored recently: the routine enriches these in its next
+  // dump so repeat mentions get snapshot data, not just trending symbols.
+  const cutoff = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const { results } = await env.DB.prepare(
+    `SELECT DISTINCT ticker FROM candidates WHERE scored_at_utc >= ?
+     ORDER BY ticker LIMIT 25`
+  ).bind(cutoff).all();
+  return json({ tickers: results.map(r => r.ticker) });
+}
+
 async function playsDue(env) {
   const today = new Date().toISOString().slice(0, 10);
   const { results } = await env.DB.prepare(
@@ -183,8 +216,20 @@ async function apiOverview(env, url, email) {
     for (const p of plays) (byCand[p.candidate_id] ??= []).push(p);
   }
   for (const c of candidates) c.plays = byCand[c.id] || [];
+  // Stocktwits trending strip: top-ranked snapshot symbols (routine-written).
+  let stocktwits = null;
+  const snapRow = await env.DB.prepare(
+    `SELECT payload FROM stocktwits_snapshot WHERE id = 1`).first();
+  if (snapRow) {
+    try {
+      const snap = JSON.parse(snapRow.payload);
+      const ranked = (snap.symbols || []).filter(s => s.trending_rank != null)
+        .sort((a, b) => a.trending_rank - b.trending_rank);
+      stocktwits = { fetched_at: snap.fetched_at, symbols: ranked.slice(0, 6) };
+    } catch { /* malformed snapshot: strip just doesn't render */ }
+  }
   return json({
-    scan, candidates,
+    scan, candidates, stocktwits,
     follows: follows.map(f => f.ticker),
     checks_pending: Object.fromEntries(pendingChecks.map(p => [p.ticker, p.requested_at])),
     check_batch_minutes: parseInt(env.CHECK_BATCH_WAIT_MIN || "10", 10),
@@ -502,15 +547,20 @@ export default {
       "POST /api/ingest/cramer": ingestCramer,
       "POST /api/ingest/cramer_verdicts": ingestCramerVerdicts,
       "POST /api/ingest/play_results": ingestPlayResults,
+      "POST /api/ingest/stocktwits": ingestStocktwits,
     };
     // NOTE: engine GET routes live under /api/ingest/* so the Cloudflare
     // Access bypass (which covers that prefix) applies without new policies.
+    const engineGets = {
+      "GET /api/plays/due": () => playsDue(env),
+      "GET /api/ingest/checks_due": () => apiChecksDue(env),
+      "GET /api/ingest/stocktwits": () => apiStocktwitsSnapshot(env),
+      "GET /api/ingest/st_targets": () => apiStocktwitsTargets(env),
+    };
     const engineKey = `${request.method} ${path}`;
-    if (enginePaths[engineKey] || engineKey === "GET /api/plays/due"
-        || engineKey === "GET /api/runs/pending" || engineKey === "GET /api/ingest/checks_due") {
+    if (enginePaths[engineKey] || engineGets[engineKey] || engineKey === "GET /api/runs/pending") {
       if (!engineAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
-      if (engineKey === "GET /api/plays/due") return playsDue(env);
-      if (engineKey === "GET /api/ingest/checks_due") return apiChecksDue(env);
+      if (engineGets[engineKey]) return engineGets[engineKey]();
       if (engineKey === "GET /api/runs/pending") {
         const row = await env.DB.prepare(
           `SELECT id FROM runs_requested WHERE picked_up_at IS NULL ORDER BY id LIMIT 1`).first();

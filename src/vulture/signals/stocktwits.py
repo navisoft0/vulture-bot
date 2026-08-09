@@ -1,11 +1,14 @@
 """Stocktwits signal — best-effort, never a dependency.
 
-Uses the public unauthenticated JSON endpoints the website itself uses.
-There is no official open developer API, so every function here degrades
-to an empty/None result on any failure and the pipeline runs Reddit-only.
+Preferred source: a snapshot written to the dashboard by a scheduled Claude
+routine using the Stocktwits MCP connector (parse_snapshot). Fallback: the
+public unauthenticated JSON endpoints the website itself uses. There is no
+official open developer API, so every function here degrades to an
+empty/None result on any failure and the pipeline runs Reddit-only.
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -22,6 +25,37 @@ _HEADERS = {
     "Referer": "https://stocktwits.com/",
 }
 _TIMEOUT = 10
+
+
+def parse_snapshot(snap: dict | None, max_age_min: int) -> dict[str, dict]:
+    """Index a dashboard-relayed snapshot by ticker; {} when absent or stale.
+
+    The snapshot is written by a scheduled Claude routine with the Stocktwits
+    MCP connector — richer than the public endpoints here: canonical sentiment
+    score (0-100), normalized message volume, trending rank, watcher count,
+    and a one-line "driver" synthesized from the post stream. Entries carry
+    those keys; see STOCKTWITS_ROUTINE.md for the schema.
+    """
+    if not snap:
+        return {}
+    try:
+        fetched = datetime.fromisoformat(str(snap["fetched_at"]).replace("Z", "+00:00"))
+        if fetched.tzinfo is None:
+            fetched = fetched.replace(tzinfo=timezone.utc)
+    except (KeyError, ValueError):
+        return {}
+    age_min = (datetime.now(timezone.utc) - fetched).total_seconds() / 60
+    if age_min > max_age_min:
+        log.info("Stocktwits snapshot is %.0f min old (max %d); falling back to scraping.",
+                 age_min, max_age_min)
+        return {}
+    out = {}
+    for entry in snap.get("symbols", []):
+        ticker = (entry.get("symbol") or "").strip().upper()
+        if ticker:
+            out[ticker] = entry
+    log.info("Stocktwits snapshot: %d symbols, %.0f min old.", len(out), age_min)
+    return out
 
 
 def trending_symbols() -> list[str]:

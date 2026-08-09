@@ -52,6 +52,11 @@ COMMENTS_PER_POST = int(os.getenv("COMMENTS_PER_POST", "25"))
 #: Enable the best-effort Stocktwits signal.
 STOCKTWITS_ENABLED = os.getenv("STOCKTWITS_ENABLED", "true").lower() in ("1", "true", "yes")
 
+#: Max age (minutes) of the dashboard-relayed Stocktwits snapshot (written by
+#: the scheduled Claude routine) before the engine ignores it and falls back
+#: to direct scraping. Sized to tolerate one missed routine run.
+STOCKTWITS_SNAPSHOT_MAX_AGE_MIN = int(os.getenv("STOCKTWITS_SNAPSHOT_MAX_AGE_MIN", "90"))
+
 #: Processed-post state backend: "file" or "sheet".
 STATE_BACKEND = os.getenv("STATE_BACKEND", "file")
 

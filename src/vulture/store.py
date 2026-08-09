@@ -70,6 +70,15 @@ def checks_due() -> list[str]:
     return list(data.get("tickers") or []) if data else []
 
 
+def stocktwits_snapshot() -> dict | None:
+    """Latest Stocktwits snapshot relayed via the dashboard (written there by
+    the scheduled Claude routine). None when the dashboard is unconfigured,
+    unreachable, or has no snapshot yet; freshness is the caller's problem
+    (signals.stocktwits.parse_snapshot)."""
+    data = _request("GET", "/api/ingest/stocktwits")
+    return data if data and data.get("symbols") else None
+
+
 def run_requested() -> bool:
     """Admin run-now queue fallback (used when the engine URL isn't reachable
     from the Worker). Marks the request picked-up server-side."""
