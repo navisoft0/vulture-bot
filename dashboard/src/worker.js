@@ -157,7 +157,7 @@ async function apiToday(env, url) {
   return json({ scan, candidates });
 }
 
-async function apiOverview(env, url) {
+async function apiOverview(env, url, email) {
   const days = Math.min(parseInt(url.searchParams.get("days") || "14", 10), 30);
   const all = url.searchParams.get("all") === "1";
   const since = new Date(Date.now() - days * 864e5).toISOString();
@@ -167,6 +167,11 @@ async function apiOverview(env, url) {
   const { results: candidates } = await env.DB.prepare(
     `SELECT * FROM candidates WHERE scored_at_utc >= ? ${filter}
      ORDER BY scored_at_utc DESC LIMIT 400`).bind(since).all();
+  const { results: follows } = await env.DB.prepare(
+    `SELECT ticker FROM follows WHERE email = ?`).bind(email).all();
+  const { results: pendingChecks } = await env.DB.prepare(
+    `SELECT ticker, MIN(requested_at) requested_at FROM check_requests
+     WHERE picked_up_at IS NULL GROUP BY ticker`).all();
   // Batch-attach plays (chunked: D1 caps bound params per statement).
   const byCand = {};
   const ids = candidates.map(c => c.id);
@@ -178,7 +183,73 @@ async function apiOverview(env, url) {
     for (const p of plays) (byCand[p.candidate_id] ??= []).push(p);
   }
   for (const c of candidates) c.plays = byCand[c.id] || [];
-  return json({ scan, candidates });
+  return json({
+    scan, candidates,
+    follows: follows.map(f => f.ticker),
+    checks_pending: Object.fromEntries(pendingChecks.map(p => [p.ticker, p.requested_at])),
+    check_batch_minutes: parseInt(env.CHECK_BATCH_WAIT_MIN || "10", 10),
+  });
+}
+
+async function apiFollow(request, env, email) {
+  const body = await request.json();
+  const ticker = String(body.ticker || "").toUpperCase().slice(0, 10);
+  if (!ticker) return json({ error: "ticker required" }, 400);
+  if (body.follow) {
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO follows (email, ticker, created_at) VALUES (?, ?, ?)`
+    ).bind(email, ticker, new Date().toISOString()).run();
+  } else {
+    await env.DB.prepare(`DELETE FROM follows WHERE email = ? AND ticker = ?`)
+      .bind(email, ticker).run();
+  }
+  return json({ ok: true, ticker, following: !!body.follow });
+}
+
+async function apiCheckEnqueue(request, env, email) {
+  const body = await request.json();
+  const ticker = String(body.ticker || "").toUpperCase().slice(0, 10);
+  if (!ticker) return json({ error: "ticker required" }, 400);
+  const existing = await env.DB.prepare(
+    `SELECT id FROM check_requests WHERE ticker = ? AND picked_up_at IS NULL LIMIT 1`
+  ).bind(ticker).first();
+  if (!existing) {
+    await env.DB.prepare(
+      `INSERT INTO check_requests (ticker, requested_by, requested_at) VALUES (?, ?, ?)`
+    ).bind(ticker, email, new Date().toISOString()).run();
+  }
+  const { results } = await env.DB.prepare(
+    `SELECT COUNT(DISTINCT ticker) n FROM check_requests WHERE picked_up_at IS NULL`).all();
+  return json({
+    ok: true, ticker, queued: true, already: !!existing,
+    pending: results[0].n,
+    batch_minutes: parseInt(env.CHECK_BATCH_WAIT_MIN || "10", 10),
+  });
+}
+
+/* Engine polls this. Batching policy lives here: release (and claim) the
+   queue only once the oldest request has aged past CHECK_BATCH_WAIT_MIN or
+   the queue has CHECK_BATCH_MAX distinct tickers. */
+async function apiChecksDue(env) {
+  const waitMin = parseInt(env.CHECK_BATCH_WAIT_MIN || "10", 10);
+  const maxSize = parseInt(env.CHECK_BATCH_MAX || "5", 10);
+  const { results: pending } = await env.DB.prepare(
+    `SELECT id, ticker, requested_at FROM check_requests WHERE picked_up_at IS NULL`).all();
+  if (!pending.length) return json({ tickers: [] });
+  const tickers = [...new Set(pending.map(p => p.ticker))];
+  const oldestMs = Math.min(...pending.map(p => Date.parse(p.requested_at)));
+  const ageMin = (Date.now() - oldestMs) / 60000;
+  if (ageMin < waitMin && tickers.length < maxSize) {
+    return json({ tickers: [], pending: tickers.length, oldest_age_min: Math.round(ageMin) });
+  }
+  const nowIso = new Date().toISOString();
+  for (let i = 0; i < pending.length; i += 90) {
+    const chunk = pending.slice(i, i + 90);
+    await env.DB.prepare(
+      `UPDATE check_requests SET picked_up_at = ? WHERE id IN (${chunk.map(() => "?").join(",")})`
+    ).bind(nowIso, ...chunk.map(p => p.id)).run();
+  }
+  return json({ tickers });
 }
 
 async function apiCandidates(env, url) {
@@ -194,7 +265,7 @@ async function apiCandidates(env, url) {
   return json({ candidates: results });
 }
 
-async function apiTracker(env) {
+async function apiTracker(env, email) {
   const today = new Date().toISOString().slice(0, 10);
   const { results: open } = await env.DB.prepare(
     `SELECT p.*, c.composite, c.url FROM plays p
@@ -217,7 +288,9 @@ async function apiTracker(env) {
     const k = a.key.replace("plays_", "");
     totals[k] = (totals[k] || 0) + a.value;
   }
-  return json({ open, resolved, totals });
+  const { results: follows } = await env.DB.prepare(
+    `SELECT ticker FROM follows WHERE email = ?`).bind(email).all();
+  return json({ open, resolved, totals, follows: follows.map(f => f.ticker) });
 }
 
 async function apiCramer(env) {
@@ -393,11 +466,14 @@ export default {
       "POST /api/ingest/cramer_verdicts": ingestCramerVerdicts,
       "POST /api/ingest/play_results": ingestPlayResults,
     };
+    // NOTE: engine GET routes live under /api/ingest/* so the Cloudflare
+    // Access bypass (which covers that prefix) applies without new policies.
     const engineKey = `${request.method} ${path}`;
     if (enginePaths[engineKey] || engineKey === "GET /api/plays/due"
-        || engineKey === "GET /api/runs/pending") {
+        || engineKey === "GET /api/runs/pending" || engineKey === "GET /api/ingest/checks_due") {
       if (!engineAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
       if (engineKey === "GET /api/plays/due") return playsDue(env);
+      if (engineKey === "GET /api/ingest/checks_due") return apiChecksDue(env);
       if (engineKey === "GET /api/runs/pending") {
         const row = await env.DB.prepare(
           `SELECT id FROM runs_requested WHERE picked_up_at IS NULL ORDER BY id LIMIT 1`).first();
@@ -417,9 +493,11 @@ export default {
 
     if (path === "/api/me") return json({ email, admin });
     if (path === "/api/today") return apiToday(env, url);
-    if (path === "/api/overview") return apiOverview(env, url);
+    if (path === "/api/overview") return apiOverview(env, url, email);
+    if (path === "/api/follow" && request.method === "POST") return apiFollow(request, env, email);
+    if (path === "/api/check" && request.method === "POST") return apiCheckEnqueue(request, env, email);
     if (path === "/api/candidates") return apiCandidates(env, url);
-    if (path === "/api/tracker") return apiTracker(env);
+    if (path === "/api/tracker") return apiTracker(env, email);
     if (path === "/api/cramer") return apiCramer(env);
 
     if (path.startsWith("/api/admin/")) {

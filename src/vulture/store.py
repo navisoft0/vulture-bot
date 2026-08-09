@@ -61,6 +61,15 @@ def emit_play_results(results: list[dict]) -> None:
         log.info("Dashboard: ingested %d play results.", len(results))
 
 
+def checks_due() -> list[str]:
+    """Tickers whose member re-check batch the dashboard has released.
+    The Worker owns the batching policy; a non-empty result is already
+    claimed server-side."""
+    # Path lives under /api/ingest/ so the Access bypass covers it.
+    data = _request("GET", "/api/ingest/checks_due")
+    return list(data.get("tickers") or []) if data else []
+
+
 def run_requested() -> bool:
     """Admin run-now queue fallback (used when the engine URL isn't reachable
     from the Worker). Marks the request picked-up server-side."""

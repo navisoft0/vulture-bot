@@ -208,22 +208,55 @@ def build_scoring_prompt(post: dict, comments: str, market_block: str | None,
     return "\n\n".join(sections)
 
 
-def _request_params(prompt: str) -> dict:
+RECHECK_ADDENDUM = """\
+
+# RE-CHECK MODE (overrides where in conflict)
+This request is a member-triggered RE-CHECK of a ticker already on the board.
+There is NO new Reddit post. You get the running notes from recent scored
+mentions plus FRESH market data (15-minute delayed). Re-score the ongoing
+thesis against the current data: is the move confirming, fading, or done?
+- community_conviction: carry the prior assessment implied by the notes
+  (5.0 if the notes don't indicate one). Do not invent fresh reception.
+- news_catalyst / technical_setup: score against the fresh data supplied.
+- plays_discussed: only plays already present in the notes and still live
+  (not expired); never invent new ones. Empty list is fine.
+- briefing: the updated running story — what's changed since the notes.
+- briefing_short: the updated one-liner a member sees first.
+"""
+
+
+def build_recheck_prompt(ticker: str, prior_block: str | None,
+                         market_block: str | None, stocktwits_block: str | None,
+                         today: str) -> str:
+    sections = [
+        f"Current date: {today}",
+        f"**Re-check requested for:** {ticker}",
+        f"**Running notes from recent mentions:**\n{prior_block}" if prior_block
+        else "**Running notes:** none on file — score conservatively from market data alone.",
+    ]
+    sections.append(f"**Fresh market data (15-min delayed):**\n{market_block}"
+                    if market_block else "**Fresh market data:** none supplied")
+    if stocktwits_block:
+        sections.append(f"**Stocktwits:**\n{stocktwits_block}")
+    return "\n\n".join(sections)
+
+
+def _request_params(prompt: str, recheck: bool = False) -> dict:
     return {
         "model": config.CLAUDE_MODEL,
         "max_tokens": 2500,
-        "system": SCORING_SYSTEM_PROMPT,
+        "system": SCORING_SYSTEM_PROMPT + (RECHECK_ADDENDUM if recheck else ""),
         "messages": [{"role": "user", "content": prompt}],
         "output_config": _output_config(),
     }
 
 
-def _score_sync(jobs: list[dict]) -> dict[str, TickerScore]:
+def _score_sync(jobs: list[dict], recheck: bool = False) -> dict[str, TickerScore]:
     out: dict[str, TickerScore] = {}
     client = clients.anthropic_client()
     for job in jobs:
         try:
-            message = client.messages.create(**_request_params(job["prompt"]))
+            message = client.messages.create(**_request_params(job["prompt"], recheck=recheck))
         except anthropic.RateLimitError as e:
             log.warning("Anthropic rate limit on %s: %s", job["id"], e)
             continue

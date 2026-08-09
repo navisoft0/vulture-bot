@@ -37,4 +37,6 @@ crons = ["0 6 1 * *"]
 [vars]
 ADMIN_EMAILS = "gonavisoftware@gmail.com"  # comma-separated
 RETENTION_DAYS = "90"
+CHECK_BATCH_WAIT_MIN = "10"               # member re-checks batch for this long
+CHECK_BATCH_MAX = "5"                     # ...or release early at this many tickers
 # DEV_MODE = "1"                          # local dev only: skips Access auth

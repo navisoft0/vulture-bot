@@ -52,11 +52,87 @@ body::after {
 @keyframes drift-b { to { transform: translate(100px, -60px) scale(1.08); } }
 
 /* Entrance: cards/tiles rise in with a small stagger (--i set by app.js). */
-.cards .card, .tiles .tile {
+.cards > *, .tiles .tile {
   animation: rise 0.35s ease both;
   animation-delay: calc(var(--i, 0) * 35ms);
 }
 @keyframes rise { from { opacity: 0; transform: translateY(9px); } }
+
+/* ---- flip cards (Feed) ----------------------------------------------- */
+
+.flip {
+  perspective: 1400px;
+  transition: height 0.55s cubic-bezier(0.35, 0.9, 0.3, 1);
+}
+.flip-inner {
+  position: relative; height: 100%;
+  transform-style: preserve-3d;
+  transition: transform 0.55s cubic-bezier(0.35, 0.9, 0.3, 1);
+}
+.flip.flipped .flip-inner { transform: rotateY(180deg); }
+.flip .face {
+  backface-visibility: hidden; -webkit-backface-visibility: hidden;
+  cursor: pointer;
+}
+.flip .face.back {
+  position: absolute; top: 0; left: 0; right: 0;
+  transform: rotateY(180deg);
+  border-left-color: var(--accent-strong);
+}
+.flip:hover .face { border-color: var(--line-bright); }
+
+.back-label {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent);
+}
+.flip-hint {
+  float: right; font-family: var(--mono); font-size: 10.5px;
+  color: var(--muted); opacity: 0; transition: opacity 0.2s;
+}
+.flip:hover .flip-hint { opacity: 0.8; }
+.actions {
+  display: flex; align-items: center; gap: 10px; margin-top: 12px;
+  padding-top: 10px; border-top: 1px dashed var(--line);
+}
+.actions .flip-hint { margin-left: auto; }
+.check-status { font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
+.recheck-tag {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  color: var(--accent); letter-spacing: 0.04em;
+}
+
+/* ---- follow stars + strip -------------------------------------------- */
+
+.star {
+  margin-left: auto; padding: 2px 8px; font-size: 16px; line-height: 1;
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  transition: color 0.15s, transform 0.15s;
+}
+.star:hover { color: var(--amber); transform: scale(1.2); }
+.star.on { color: var(--amber); }
+.star.on:active { transform: scale(0.9); }
+
+.follow-strip {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: -8px 0 18px;
+}
+.strip-label {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted);
+}
+.chip {
+  font-family: var(--mono); font-size: 12px; padding: 3px 12px;
+  background: var(--panel); color: var(--amber);
+  border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.chip:hover { border-color: var(--amber); transform: translateY(-1px); }
+
+.toggle {
+  margin-left: 14px; font-family: var(--mono); font-size: 12px;
+  color: var(--muted); cursor: pointer; user-select: none;
+}
+.toggle input { accent-color: var(--accent-strong); margin-right: 4px; }
 
 a { color: var(--accent); text-decoration: none; transition: color 0.15s; }
 a:hover { color: #c4b0fc; text-decoration: underline; text-underline-offset: 3px; }
@@ -309,4 +385,6 @@ button.primary:disabled { opacity: 0.45; cursor: default; transform: none; }
   * { transition: none !important; animation: none !important; }
   .tile:hover, .card:hover { transform: none; }
   ::view-transition-old(root), ::view-transition-new(root) { animation: none !important; }
+  /* Flip becomes an instant swap. */
+  .flip-inner { transition: none !important; }
 }

@@ -1,10 +1,9 @@
-"""Massive (formerly Polygon.io) market-data wrapper for the free tier.
+"""Massive (formerly Polygon.io) market-data wrapper — Stocks Starter plan.
 
-The free Basic plans allow 5 API calls/minute with end-of-day price data
-(the freshest bar during market hours is the previous session's close;
-reference data and the hourly news feed are not delayed). This module owns
-the rate-limit discipline: a single lock-guarded throttle plus a per-day
-cache, so repeat mentions of the same ticker cost zero calls.
+Starter gives unlimited API calls and 15-minute-delayed intraday data
+(snapshots, minute aggregates). A light courtesy throttle remains, plus a
+per-day cache for reference-ish lookups and a short-TTL cache for intraday
+snapshots so a burst of repeat mentions stays cheap.
 
 Every public method returns None/[] on failure — a Massive outage degrades
 scoring, it never kills the scan.
@@ -20,8 +19,12 @@ from massive import RESTClient
 
 log = logging.getLogger(__name__)
 
-#: ~4.6 calls/minute, safely under the 5/min free-tier limit.
-_MIN_INTERVAL = 13.0
+#: Courtesy spacing between calls (plan is unlimited; don't hammer anyway).
+_MIN_INTERVAL = 0.15
+
+#: Intraday snapshots are 15-min delayed; re-fetching more often than this
+#: within one scan buys nothing.
+_SNAPSHOT_TTL_S = 120.0
 
 
 class MarketData:
@@ -30,6 +33,7 @@ class MarketData:
         self._lock = threading.Lock()
         self._last_call = 0.0
         self._cache: dict[tuple, object] = {}
+        self._snap_cache: dict[str, tuple[float, dict | None]] = {}
 
     # ------------------------------------------------------------------
     # Throttle + cache plumbing
@@ -75,8 +79,42 @@ class MarketData:
             "market_cap": getattr(details, "market_cap", None),
         }
 
+    def snapshot(self, symbol: str) -> dict | None:
+        """Intraday snapshot (15-min delayed): today's price, move %, volume.
+
+        Returns None outside sessions with data (e.g. before any trade) or on
+        failure. Cached briefly (_SNAPSHOT_TTL_S), not per-day.
+        """
+        now = time.monotonic()
+        cached = self._snap_cache.get(symbol)
+        if cached and now - cached[0] < _SNAPSHOT_TTL_S:
+            return cached[1]
+
+        def fetch():
+            return self._client.get_snapshot_ticker("stocks", symbol)
+
+        snap = self._call(None, fetch, not_found_ok=True)
+        result = None
+        if snap is not None:
+            day = getattr(snap, "day", None)
+            minute = getattr(snap, "min", None)
+            prev = getattr(snap, "prev_day", None) or getattr(snap, "prevDay", None)
+            change_pct = (getattr(snap, "todays_change_percent", None)
+                          or getattr(snap, "todaysChangePerc", None))
+            price = (getattr(minute, "close", None) if minute else None) \
+                or (getattr(day, "close", None) if day else None)
+            if price:
+                result = {
+                    "price": price,
+                    "day_change_pct": round(change_pct, 2) if change_pct is not None else None,
+                    "day_volume": getattr(day, "volume", None) if day else None,
+                    "prev_close": getattr(prev, "close", None) if prev else None,
+                }
+        self._snap_cache[symbol] = (now, result)
+        return result
+
     def prev_day_bar(self, symbol: str) -> dict | None:
-        """Previous session's OHLCV (the freshest bar on the free tier intraday)."""
+        """Previous session's OHLCV."""
         aggs = self._call(("prev_bar", symbol), self._client.get_previous_close_agg, symbol)
         if not aggs:
             return None

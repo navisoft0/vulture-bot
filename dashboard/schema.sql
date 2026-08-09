@@ -83,6 +83,23 @@ CREATE TABLE IF NOT EXISTS runs_requested (
   picked_up_at TEXT
 );
 
+-- Per-member follows (the ⭐ on feed cards)
+CREATE TABLE IF NOT EXISTS follows (
+  email      TEXT NOT NULL,
+  ticker     TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (email, ticker)
+);
+
+-- Member-requested ticker re-checks; batched, then claimed by the engine
+CREATE TABLE IF NOT EXISTS check_requests (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  ticker       TEXT NOT NULL,
+  requested_by TEXT NOT NULL,
+  requested_at TEXT NOT NULL,
+  picked_up_at TEXT
+);
+
 -- Never-purged aggregates, updated during retention
 CREATE TABLE IF NOT EXISTS summary_totals (
   key   TEXT PRIMARY KEY,               -- e.g. plays_HIT, cramer_MISS

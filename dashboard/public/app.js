@@ -32,8 +32,13 @@ function playLine(p) {
   return `${arrow} <span class="num">${esc(bits.join(" · "))}</span>${p.rationale ? " — " + esc(p.rationale) : ""}`;
 }
 
+/* Feed page state shared between renderer and event handlers. */
+const feedState = { follows: new Set(), checksPending: {}, batchMin: 10 };
+
+const isCheckRow = c => (c.post_id || "").startsWith("check-");
+
 /* One card per ticker (per day) — `group` is every scored post for it,
-   newest first. The highest-composite post leads; sources expand below. */
+   newest first. Front face = quick read; back face = full analysis. */
 function tickerCard(group) {
   const lead = group.slice().sort((a, b) => b.composite - a.composite)[0];
   const badges = [];
@@ -53,54 +58,98 @@ function tickerCard(group) {
   }
   const flags = [...new Set(group.map(c => c.red_flags).filter(Boolean))].join(" · ");
 
-  const source = s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">r/${esc(s.subreddit)} ↗</a>
-      · <span class="num">${Number(s.composite).toFixed(1)}</span> · ${when(s.scored_at_utc)}`;
+  const source = s => isCheckRow(s)
+    ? `<span class="recheck-tag">⟳ re-check</span>
+       · <span class="num">${Number(s.composite).toFixed(1)}</span> · ${when(s.scored_at_utc)}`
+    : `<a href="${esc(s.url)}" target="_blank" rel="noopener">r/${esc(s.subreddit)} ↗</a>
+       · <span class="num">${Number(s.composite).toFixed(1)}</span> · ${when(s.scored_at_utc)}`;
 
-  // Short line: newest post that carries a one-liner (its briefing is the
+  // Short line: newest row that carries a one-liner (its briefing is the
   // running story); legacy rows fall back to the lead briefing's first sentence.
   const newest = group.find(c => c.briefing_short) || lead;
   const shortLine = newest.briefing_short
     || (lead.briefing || "").split(/(?<=[.!?])\s/)[0];
-  // One expander does it all: each source's link + its synthesized debrief.
-  const withText = byConviction.filter(c => c.briefing);
-  const analysis = `<details class="sources analysis">
-      <summary>full analysis${group.length > 1 ? ` · ${group.length} sources` : ""}</summary>
-      <div class="analysis-body">${byConviction.map(c => `
-        <div class="analysis-src">
-          <div class="analysis-meta">${source(c)}</div>
-          ${c.briefing ? `<p>${esc(c.briefing)}</p>` : ""}
-        </div>`).join("")}</div></details>`;
+  // Full analysis (back face): the newest cumulative briefing leads, then
+  // every contributing source with its own debrief, newest first.
+  const newestBrief = group.find(c => c.briefing) || lead;
+  const rest = group.filter(c => c !== newestBrief && c.briefing);
+
+  const T = esc(lead.ticker);
+  const following = feedState.follows.has(lead.ticker);
+  const pendingAt = feedState.checksPending[lead.ticker];
+  const star = `<button class="star ${following ? "on" : ""}" data-ticker="${T}"
+    aria-pressed="${following}" title="${following ? "unfollow" : "follow"}">${following ? "★" : "☆"}</button>`;
 
   const search = esc([lead.ticker, ...group.map(c => c.briefing), ...group.map(c => c.subreddit)]
     .join(" ").toLowerCase());
-  return `<div class="card ${scoreClass(lead.composite)}" data-search="${search}">
-    <div class="head">
-      <span class="ticker">${esc(lead.ticker)}</span>
-      <span class="score ${scoreClass(lead.composite)}">${Number(lead.composite).toFixed(1)}</span>
-      ${badges.join(" ")}
+  const scoreCls = scoreClass(lead.composite);
+  const scorePill = `<span class="score ${scoreCls}">${Number(lead.composite).toFixed(1)}</span>`;
+
+  return `<div class="flip" data-search="${search}" data-ticker="${T}">
+   <div class="flip-inner">
+    <div class="face card ${scoreCls}">
+      <div class="head">
+        <span class="ticker">${T}</span>${scorePill}${badges.join(" ")}${star}
+      </div>
+      <div class="subscores">
+        <span>thesis <b>${lead.thesis}</b></span><span>community <b>${lead.community}</b></span>
+        <span>news <b>${lead.news}</b></span><span>technicals <b>${lead.technical}</b></span>
+      </div>
+      <div class="brief">${esc(shortLine)}</div>
+      ${plays.length ? `<ul class="plays">${plays.join("")}</ul>` : ""}
+      ${flags ? `<div class="flags">${esc(flags)}</div>` : ""}
+      <div class="meta">${when(lead.scored_at_utc)} · ${group.length > 1
+        ? `${group.length} sources` : source(lead)}<span class="flip-hint">tap for analysis ⟲</span></div>
     </div>
-    <div class="subscores">
-      <span>thesis <b>${lead.thesis}</b></span><span>community <b>${lead.community}</b></span>
-      <span>news <b>${lead.news}</b></span><span>technicals <b>${lead.technical}</b></span>
+    <div class="face back card ${scoreCls}">
+      <div class="head">
+        <span class="ticker">${T}</span>${scorePill}
+        <span class="back-label">full analysis</span>${star}
+      </div>
+      ${newestBrief.briefing ? `<div class="brief">${esc(newestBrief.briefing)}</div>
+        <div class="analysis-meta">${source(newestBrief)}</div>` : ""}
+      ${rest.length ? `<div class="analysis-body">${rest.map(c => `
+        <div class="analysis-src">
+          <div class="analysis-meta">${source(c)}</div>
+          <p>${esc(c.briefing)}</p>
+        </div>`).join("")}</div>` : ""}
+      <div class="actions">
+        <button class="primary check-btn" data-ticker="${T}" ${pendingAt ? "disabled" : ""}>
+          ${pendingAt ? "⟳ queued" : "⟳ Check"}</button>
+        <span class="check-status">${pendingAt
+          ? `re-check queued · batches ~${feedState.batchMin}m` : ""}</span>
+        <span class="flip-hint">tap to flip back ⟲</span>
+      </div>
     </div>
-    <div class="brief">${esc(shortLine)}</div>
-    ${plays.length ? `<ul class="plays">${plays.join("")}</ul>` : ""}
-    ${flags ? `<div class="flags">${esc(flags)}</div>` : ""}
-    ${withText.length ? analysis
-      : `<div class="meta">scored ${when(lead.scored_at_utc)} · ${source(lead)}</div>`}
+   </div>
   </div>`;
 }
 
 /* Stagger the entrance animation of freshly rendered cards/tiles. */
 function stagger() {
-  document.querySelectorAll(".cards .card, .tiles .tile")
+  document.querySelectorAll(".cards > *, .tiles .tile")
     .forEach((el, i) => el.style.setProperty("--i", Math.min(i, 12)));
+}
+
+/* Chips for followed tickers; clicking one filters the feed to it. */
+function renderFollowStrip() {
+  const el = $("#follow-strip");
+  if (!el) return;
+  const list = [...feedState.follows].sort();
+  el.innerHTML = list.length
+    ? `<span class="strip-label">following</span>` + list.map(t =>
+        `<button class="chip" data-ticker="${esc(t)}">★ ${esc(t)}</button>`).join("")
+    : "";
+  el.style.display = list.length ? "" : "none";
 }
 
 const pages = {
   async today() {
     const all = new URLSearchParams(location.search).get("all") === "1";
     const data = await api(`/api/overview?days=14${all ? "&all=1" : ""}`);
+    feedState.follows = new Set(data.follows || []);
+    feedState.checksPending = data.checks_pending || {};
+    feedState.batchMin = data.check_batch_minutes || 10;
     $("#scan-info").textContent = data.scan
       ? `Last scan ${when(data.scan.started_at)} · ${data.scan.scored} scored · ${data.scan.posted} promoted · trigger: ${data.scan.trig || data.scan.trigger || "cron"}`
       : "No scans ingested yet.";
@@ -132,39 +181,110 @@ const pages = {
     }
     $("#sections").innerHTML = sections.length ? sections.join("")
       : '<div class="empty">Nothing here yet — vetted picks appear after the next scan.</div>';
+    renderFollowStrip();
     stagger();
 
     $("#search").addEventListener("input", e => {
       const q = e.target.value.trim().toLowerCase();
-      for (const card of document.querySelectorAll(".card[data-search]"))
+      for (const card of document.querySelectorAll(".flip[data-search]"))
         card.style.display = !q || card.dataset.search.includes(q) ? "" : "none";
       for (const sec of document.querySelectorAll("section.day")) {
-        const any = [...sec.querySelectorAll(".card")].some(c => c.style.display !== "none");
+        const any = [...sec.querySelectorAll(".flip")].some(c => c.style.display !== "none");
         sec.style.display = any ? "" : "none";
+      }
+    });
+
+    $("#follow-strip").addEventListener("click", e => {
+      const chip = e.target.closest(".chip");
+      if (!chip) return;
+      const inp = $("#search");
+      inp.value = inp.value === chip.dataset.ticker.toLowerCase() ? "" : chip.dataset.ticker.toLowerCase();
+      inp.dispatchEvent(new Event("input"));
+    });
+
+    // One delegated handler: stars, check buttons, and card flips.
+    $("#sections").addEventListener("click", async e => {
+      const star = e.target.closest(".star");
+      if (star) {
+        const t = star.dataset.ticker;
+        const on = !feedState.follows.has(t);
+        on ? feedState.follows.add(t) : feedState.follows.delete(t);
+        for (const s of document.querySelectorAll(`.star[data-ticker="${t}"]`)) {
+          s.classList.toggle("on", on); s.textContent = on ? "★" : "☆";
+          s.setAttribute("aria-pressed", on);
+        }
+        renderFollowStrip();
+        try { await fetch("/api/follow", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ticker: t, follow: on }) }); } catch {}
+        return;
+      }
+      const check = e.target.closest(".check-btn");
+      if (check) {
+        const t = check.dataset.ticker;
+        check.disabled = true; check.textContent = "⟳ queued";
+        try {
+          const r = await fetch("/api/check", { method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ ticker: t }) });
+          const d = await r.json();
+          feedState.checksPending[t] = new Date().toISOString();
+          check.closest(".actions").querySelector(".check-status").textContent =
+            `re-check queued (${d.pending} in batch) · batches ~${d.batch_minutes}m`;
+        } catch {
+          check.disabled = false; check.textContent = "⟳ Check";
+        }
+        return;
+      }
+      if (e.target.closest("a, button, details, summary, input")) return;
+      const flip = e.target.closest(".flip");
+      if (flip) {
+        // Animate container height alongside the rotation so short fronts
+        // grow into tall analyses (and back) without dead space.
+        const toBack = !flip.classList.contains("flipped");
+        const target = flip.querySelector(toBack ? ".face.back" : ".face:not(.back)");
+        flip.style.height = flip.offsetHeight + "px";
+        flip.classList.toggle("flipped");
+        requestAnimationFrame(() => { flip.style.height = target.offsetHeight + "px"; });
+        flip.addEventListener("transitionend", function clear(ev) {
+          if (ev.propertyName !== "height") return;
+          if (!flip.classList.contains("flipped")) flip.style.height = "";
+          flip.removeEventListener("transitionend", clear);
+        });
       }
     });
   },
 
   async tracker() {
     const d = await api("/api/tracker");
-    const judged = d.totals.HIT + d.totals.MISS;
-    $("#tiles").innerHTML = `
-      <div class="tile"><div class="l">hits</div><div class="n ok">${d.totals.HIT}</div></div>
-      <div class="tile"><div class="l">misses</div><div class="n bad">${d.totals.MISS}</div></div>
-      <div class="tile"><div class="l">washes</div><div class="n mid">${d.totals.WASH}</div></div>
-      <div class="tile"><div class="l">hit rate</div><div class="n">${judged ? Math.round(d.totals.HIT / judged * 100) + "%" : "—"}</div></div>`;
-    $("#open").innerHTML = d.open.length ? d.open.map(p => `<tr>
-      <td class="num"><b>${esc(p.ticker)}</b></td><td>${playLine(p)}</td>
-      <td class="num">${esc(p.expiry || "open-ended")}</td><td>${when(p.promoted_at)}</td>
-      <td><a href="${esc(p.url)}" target="_blank" rel="noopener">post ↗</a></td></tr>`).join("")
-      : '<tr><td colspan="5" class="empty">No open tracked plays.</td></tr>';
-    $("#resolved").innerHTML = d.resolved.length ? d.resolved.map(r => `<tr>
-      <td class="num"><b>${esc(r.ticker)}</b></td><td>${playLine(r)}</td>
-      <td><span class="vbadge ${r.verdict === "HIT" ? "ok" : r.verdict === "MISS" ? "bad" : "mid"}">${esc(r.verdict)}</span></td>
-      <td class="num ${r.return_pct > 0 ? "ok" : r.return_pct < 0 ? "bad" : ""}">${fmtPct(r.return_pct)}</td>
-      <td>${esc(r.method)}</td><td>${when(r.graded_at)}</td></tr>`).join("")
-      : '<tr><td colspan="6" class="empty">Nothing resolved yet.</td></tr>';
-    stagger();
+    const follows = new Set(d.follows || []);
+    const render = () => {
+      const mine = $("#mine-only")?.checked;
+      const keep = rows => mine ? rows.filter(r => follows.has(r.ticker)) : rows;
+      const open = keep(d.open), resolved = keep(d.resolved);
+      const totals = mine
+        ? resolved.reduce((t, r) => { t[r.verdict] = (t[r.verdict] || 0) + 1; return t; },
+            { HIT: 0, MISS: 0, WASH: 0 })
+        : d.totals;
+      const judged = (totals.HIT || 0) + (totals.MISS || 0);
+      $("#tiles").innerHTML = `
+        <div class="tile"><div class="l">hits</div><div class="n ok">${totals.HIT || 0}</div></div>
+        <div class="tile"><div class="l">misses</div><div class="n bad">${totals.MISS || 0}</div></div>
+        <div class="tile"><div class="l">washes</div><div class="n mid">${totals.WASH || 0}</div></div>
+        <div class="tile"><div class="l">hit rate</div><div class="n">${judged ? Math.round((totals.HIT || 0) / judged * 100) + "%" : "—"}</div></div>`;
+      $("#open").innerHTML = open.length ? open.map(p => `<tr>
+        <td class="num">${follows.has(p.ticker) ? "★ " : ""}<b>${esc(p.ticker)}</b></td><td>${playLine(p)}</td>
+        <td class="num">${esc(p.expiry || "open-ended")}</td><td>${when(p.promoted_at)}</td>
+        <td><a href="${esc(p.url)}" target="_blank" rel="noopener">post ↗</a></td></tr>`).join("")
+        : `<tr><td colspan="5" class="empty">${mine ? "None of your followed tickers have open plays." : "No open tracked plays."}</td></tr>`;
+      $("#resolved").innerHTML = resolved.length ? resolved.map(r => `<tr>
+        <td class="num">${follows.has(r.ticker) ? "★ " : ""}<b>${esc(r.ticker)}</b></td><td>${playLine(r)}</td>
+        <td><span class="vbadge ${r.verdict === "HIT" ? "ok" : r.verdict === "MISS" ? "bad" : "mid"}">${esc(r.verdict)}</span></td>
+        <td class="num ${r.return_pct > 0 ? "ok" : r.return_pct < 0 ? "bad" : ""}">${fmtPct(r.return_pct)}</td>
+        <td>${esc(r.method)}</td><td>${when(r.graded_at)}</td></tr>`).join("")
+        : `<tr><td colspan="6" class="empty">${mine ? "Nothing resolved for your followed tickers." : "Nothing resolved yet."}</td></tr>`;
+      stagger();
+    };
+    $("#mine-only")?.addEventListener("change", render);
+    render();
   },
 
   async cramer() {

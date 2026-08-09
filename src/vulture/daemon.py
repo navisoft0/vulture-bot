@@ -17,7 +17,7 @@ from datetime import date, datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config, store
-from .pipeline import run_scan
+from .pipeline import run_recheck, run_scan
 from .trackers.cramer import run_cramer_tracker
 
 log = logging.getLogger(__name__)
@@ -106,13 +106,20 @@ def run_daemon() -> None:
         sleep_s = max(60.0, interval - elapsed)
         log.info("Next scan in %.0f min (or on run-now trigger).", sleep_s / 60)
 
-        # Wake early on the HTTP trigger; check the queue fallback midway.
+        # Wake early on the HTTP trigger; poll the run queue and the member
+        # re-check queue between naps.
         triggered = _run_now.wait(timeout=min(sleep_s, 300))
         waited = min(sleep_s, 300)
         while not triggered and waited < sleep_s:
             if store.run_requested():
                 triggered = True
                 break
+            checks = store.checks_due()
+            if checks:
+                try:
+                    run_recheck(checks)
+                except Exception:
+                    log.exception("Re-check failed; continuing.")
             triggered = _run_now.wait(timeout=min(300, sleep_s - waited))
             waited += 300
         _run_now.clear()

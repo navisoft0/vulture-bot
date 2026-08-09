@@ -45,11 +45,17 @@ class ScoredCandidate:
 
 def _market_block(company: dict | None, bar: dict | None, rsi: float | None,
                   bars30: dict | None, sma50: float | None,
-                  news: list[dict], market) -> str | None:
+                  news: list[dict], market, snapshot: dict | None = None) -> str | None:
     """Compact market-context text for the Claude prompt."""
     if not company:
         return None
     lines = [f"Ticker: {company['ticker']} ({company.get('name') or 'unknown name'})"]
+    if snapshot and snapshot.get("price"):
+        move = (f" ({snapshot['day_change_pct']:+.1f}% vs prev close)"
+                if snapshot.get("day_change_pct") is not None else "")
+        vol = (f" · Vol so far {snapshot['day_volume'] / 1e6:.1f}M"
+               if snapshot.get("day_volume") else "")
+        lines.append(f"Today intraday (15-min delayed): ${snapshot['price']:,.2f}{move}{vol}")
     line = market.market_line(bar, rsi)
     if line:
         lines.append(f"Previous session: {line}")
@@ -166,12 +172,14 @@ def run_scan(trigger: str = "cron") -> None:
             if company:
                 enriched_sym = company["ticker"]
                 break
+        snap = None
         if enriched_sym:
             bar = market.prev_day_bar(enriched_sym)
             rsi_val = market.rsi(enriched_sym)
             bars30 = market.bars_summary(enriched_sym)
             sma50 = market.sma(enriched_sym, window=50)
             news = market.recent_news(enriched_sym)
+            snap = market.snapshot(enriched_sym)
             if config.STOCKTWITS_ENABLED and enriched_sym not in st_stats_cache:
                 st_stats_cache[enriched_sym] = stocktwits.symbol_stats(enriched_sym)
 
@@ -179,7 +187,8 @@ def run_scan(trigger: str = "cron") -> None:
         hist = history.get(enriched_sym) if enriched_sym else None
         prompt = analysis.build_scoring_prompt(
             post, comments,
-            market_block=_market_block(company, bar, rsi_val, bars30, sma50, news, market),
+            market_block=_market_block(company, bar, rsi_val, bars30, sma50, news, market,
+                                       snapshot=snap),
             stocktwits_block=_stocktwits_block(
                 st_stats_cache.get(enriched_sym), enriched_sym in trending
             ) if enriched_sym else None,
@@ -288,3 +297,73 @@ def run_scan(trigger: str = "cron") -> None:
     processed_store.add(newly_processed)
     log.info("--- Scan complete: %d posts processed, %d scored, %d posted ---",
              len(newly_processed), len(scored), sum(c.posted for c in best.values()))
+
+
+def run_recheck(tickers: list[str]) -> None:
+    """Member-requested re-scores: no new posts — prior briefings + fresh
+    (15-min delayed) market data. Results land in the dashboard as new
+    candidate rows (radar=1) so ticker cards update in place. Not written to
+    the Sheet: rechecks must not inflate organic mention counts."""
+    scan_id = str(uuid.uuid4())
+    started_at = datetime.now(timezone.utc).isoformat()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    log.info("--- Re-check starting (%s): %s ---", scan_id[:8], ", ".join(tickers))
+
+    market = clients.market_client()
+    history = momentum.load_history()
+    trending = set(stocktwits.trending_symbols()) if config.STOCKTWITS_ENABLED else set()
+
+    jobs: list[dict] = []
+    for raw in dict.fromkeys(t.upper() for t in tickers):
+        company = market.validate_ticker(raw)
+        if not company:
+            log.warning("Re-check: %s did not validate; skipping.", raw)
+            continue
+        sym = company["ticker"]
+        block = _market_block(
+            company, market.prev_day_bar(sym), market.rsi(sym),
+            market.bars_summary(sym), market.sma(sym, window=50),
+            market.recent_news(sym), market, snapshot=market.snapshot(sym),
+        )
+        hist = history.get(sym)
+        st_block = _stocktwits_block(
+            stocktwits.symbol_stats(sym) if config.STOCKTWITS_ENABLED else None,
+            sym in trending)
+        jobs.append({"id": sym, "prompt": analysis.build_recheck_prompt(
+            sym, hist.prior_block() if hist else None, block, st_block, today)})
+
+    if not jobs:
+        log.info("Re-check: nothing to score.")
+        return
+    # Members are waiting on these — synchronous, never batched.
+    results = analysis._score_sync(jobs, recheck=True)
+
+    now = datetime.now(timezone.utc).isoformat()
+    candidates = []
+    for sym, ts in results.items():
+        if ts.ticker in ("N/A", ""):
+            continue
+        hist = history.get(sym)
+        comp = scoring.composite(ts, cross_platform=sym in trending,
+                                 momentum_bonus=momentum.bonus(hist, "")[0] if hist else 0.0)
+        candidates.append({
+            "post_id": f"check-{scan_id[:8]}-{sym}", "ticker": sym, "composite": comp,
+            "thesis": ts.thesis_quality, "community": ts.community_conviction,
+            "news": ts.news_catalyst, "technical": ts.technical_setup,
+            "cross_platform": sym in trending,
+            "prior_mentions": hist.count if hist else 0,
+            "momentum_bonus": 0, "radar": True, "posted": False,
+            "briefing": ts.briefing, "briefing_short": ts.briefing_short,
+            "red_flags": "; ".join(ts.red_flags),
+            "url": "", "subreddit": "", "post_created_utc": now, "scored_at_utc": now,
+            "plays": [],  # plays stay owned by the original posts
+        })
+        log.info("Re-checked %s at %.2f.", sym, comp)
+
+    store.emit_scan(
+        {"id": scan_id, "started_at": started_at,
+         "finished_at": datetime.now(timezone.utc).isoformat(),
+         "posts_seen": 0, "scored": len(candidates), "posted": 0, "trigger": "check"},
+        candidates,
+    )
+    log.info("--- Re-check complete: %d/%d tickers scored ---", len(candidates), len(jobs))
