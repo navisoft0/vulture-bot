@@ -91,23 +91,27 @@ function tickerCard(group) {
       <div class="head">
         <span class="ticker">${T}</span>${scorePill}${badges.join(" ")}${star}
       </div>
-      <div class="subscores">
-        <span>thesis <b>${lead.thesis}</b></span><span>community <b>${lead.community}</b></span>
-        <span>news <b>${lead.news}</b></span><span>technicals <b>${lead.technical}</b></span>
+      <div class="mkt" data-mkt="${T}">
+        <span class="mkt-price">·&thinsp;·&thinsp;·</span><span class="mkt-chg"></span>
+        <span class="mkt-side"></span>
       </div>
       <div class="brief">${esc(shortLine)}</div>
-      ${plays.length ? `<ul class="plays">${plays.join("")}</ul>` : ""}
-      ${flags ? `<div class="flags">${esc(flags)}</div>` : ""}
-      <div class="meta">${when(lead.scored_at_utc)} · ${group.length > 1
-        ? `${group.length} sources` : source(lead)}<span class="flip-hint">tap for analysis ⟲</span></div>
+      <div class="meta">${when(lead.scored_at_utc)}${group.length > 1
+        ? ` · ${group.length} sources` : ""}<span class="flip-hint">tap for analysis ⟲</span></div>
     </div>
     <div class="face back card ${scoreCls}">
       <div class="head">
         <span class="ticker">${T}</span>${scorePill}
         <span class="back-label">full analysis</span>${star}
       </div>
+      <div class="subscores">
+        <span>thesis <b>${lead.thesis}</b></span><span>community <b>${lead.community}</b></span>
+        <span>news <b>${lead.news}</b></span><span>technicals <b>${lead.technical}</b></span>
+      </div>
       ${newestBrief.briefing ? `<div class="brief">${esc(newestBrief.briefing)}</div>
         <div class="analysis-meta">${source(newestBrief)}</div>` : ""}
+      ${plays.length ? `<ul class="plays">${plays.join("")}</ul>` : ""}
+      ${flags ? `<div class="flags">${esc(flags)}</div>` : ""}
       ${rest.length ? `<div class="analysis-body">${rest.map(c => `
         <div class="analysis-src">
           <div class="analysis-meta">${source(c)}</div>
@@ -123,6 +127,32 @@ function tickerCard(group) {
     </div>
    </div>
   </div>`;
+}
+
+const fmtVol = v => v == null ? null : v >= 1e9 ? (v / 1e9).toFixed(1) + "B"
+  : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : Math.round(v / 1e3) + "K";
+
+/* Fill every card's market strip from the quotes proxy (15-min delayed). */
+async function loadQuotes() {
+  const strips = [...document.querySelectorAll("[data-mkt]")];
+  const tickers = [...new Set(strips.map(el => el.dataset.mkt))];
+  if (!tickers.length) return;
+  let quotes = {};
+  try { quotes = (await api(`/api/market/quotes?tickers=${tickers.join(",")}`)).quotes || {}; }
+  catch { /* market strip is progressive enhancement */ }
+  for (const el of strips) {
+    const q = quotes[el.dataset.mkt];
+    if (!q || q.price == null) { el.remove(); continue; }
+    el.querySelector(".mkt-price").textContent = `$${Number(q.price).toLocaleString([], { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const chg = el.querySelector(".mkt-chg");
+    if (q.change_pct != null) {
+      chg.textContent = `${q.change_pct > 0 ? "▲" : q.change_pct < 0 ? "▼" : ""} ${fmtPct(q.change_pct)}`;
+      chg.className = `mkt-chg ${q.change_pct > 0 ? "ok" : q.change_pct < 0 ? "bad" : ""}`;
+    }
+    const side = [q.rsi != null ? `RSI ${q.rsi}` : null,
+                  fmtVol(q.volume) ? `VOL ${fmtVol(q.volume)}` : null].filter(Boolean).join(" · ");
+    el.querySelector(".mkt-side").textContent = side;
+  }
 }
 
 /* Stagger the entrance animation of freshly rendered cards/tiles. */
@@ -183,6 +213,7 @@ const pages = {
       : '<div class="empty">Nothing here yet — vetted picks appear after the next scan.</div>';
     renderFollowStrip();
     stagger();
+    loadQuotes();
 
     $("#search").addEventListener("input", e => {
       const q = e.target.value.trim().toLowerCase();

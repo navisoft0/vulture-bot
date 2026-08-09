@@ -191,6 +191,43 @@ async function apiOverview(env, url, email) {
   });
 }
 
+/* Live-ish market strip for feed cards: Massive snapshot + RSI per ticker,
+   proxied so the key stays server-side, edge-cached ~2 min. 15-min delayed
+   data per the Stocks Starter plan. */
+async function apiQuotes(env, url) {
+  if (!env.MASSIVE_API_KEY) return json({ quotes: {} });
+  const tickers = [...new Set((url.searchParams.get("tickers") || "")
+    .split(",").map(t => t.trim().toUpperCase()).filter(t => /^[A-Z.]{1,10}$/.test(t)))].slice(0, 60);
+  const auth = { Authorization: `Bearer ${env.MASSIVE_API_KEY}` };
+  const quotes = {};
+  await Promise.all(tickers.map(async t => {
+    const cacheKey = new Request(`https://internal.quote/${t}`);
+    let hit = await caches.default.match(cacheKey);
+    if (!hit) {
+      const [snap, rsi] = await Promise.all([
+        fetch(`https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers/${t}`,
+          { headers: auth }).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch(`https://api.massive.com/v1/indicators/rsi/${t}?timespan=day&window=14&series_type=close&limit=1`,
+          { headers: auth }).then(r => r.ok ? r.json() : null).catch(() => null),
+      ]);
+      const k = snap?.ticker || {};
+      const q = {
+        price: k.min?.c ?? k.day?.c ?? null,
+        change_pct: k.todaysChangePerc != null ? Math.round(k.todaysChangePerc * 100) / 100 : null,
+        volume: k.day?.v ?? null,
+        prev_close: k.prevDay?.c ?? null,
+        rsi: rsi?.results?.values?.[0]?.value != null
+          ? Math.round(rsi.results.values[0].value) : null,
+      };
+      hit = new Response(JSON.stringify(q),
+        { headers: { ...JSON_HEADERS, "cache-control": "public, max-age=120" } });
+      await caches.default.put(cacheKey, hit.clone());
+    }
+    quotes[t] = await hit.json();
+  }));
+  return json({ quotes });
+}
+
 async function apiFollow(request, env, email) {
   const body = await request.json();
   const ticker = String(body.ticker || "").toUpperCase().slice(0, 10);
@@ -494,6 +531,7 @@ export default {
     if (path === "/api/me") return json({ email, admin });
     if (path === "/api/today") return apiToday(env, url);
     if (path === "/api/overview") return apiOverview(env, url, email);
+    if (path === "/api/market/quotes") return apiQuotes(env, url);
     if (path === "/api/follow" && request.method === "POST") return apiFollow(request, env, email);
     if (path === "/api/check" && request.method === "POST") return apiCheckEnqueue(request, env, email);
     if (path === "/api/candidates") return apiCandidates(env, url);
