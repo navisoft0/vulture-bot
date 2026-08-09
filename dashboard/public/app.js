@@ -407,7 +407,7 @@ const pages = {
     const stanceDot = s => ({ buy: "ok", sell: "bad", avoid: "bad", trim: "mid", hold: "" }[s] ?? "");
     $("#mentions").innerHTML = d.mentions.length ? d.mentions.map(m => `<tr>
       <td>${when(m.extracted_at)}</td><td class="num"><b>${esc(m.ticker)}</b></td>
-      <td><span class="${stanceDot(m.stance)}">●</span> ${esc(m.stance)}</td>
+      <td class="stance"><span class="${stanceDot(m.stance)}">●</span> ${esc(m.stance)}</td>
       <td>${m.verdict ? `<span class="vbadge ${m.verdict === "HIT" ? "ok" : m.verdict === "MISS" ? "bad" : "mid"}">${m.verdict}</span> <span class="num">α ${fmtPct(m.alpha_pct)}</span>` : "open"}</td>
       <td>${esc(m.quote)}</td></tr>`).join("")
       : '<tr><td colspan="5" class="empty">No mentions yet.</td></tr>';

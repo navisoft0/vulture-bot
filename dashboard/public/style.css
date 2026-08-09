@@ -173,13 +173,13 @@ nav .me { margin-left: auto; color: var(--muted); font-size: 12px; }
 
 main { max-width: 1140px; margin: 0 auto; padding: 30px 20px 70px; }
 
-h1 { font-size: 36px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 4px; }
+h1 { font-size: 42px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 4px; }
 h1 .dot { color: var(--accent); }
 .sub { color: var(--muted); margin-bottom: 24px; font-size: 15px; }
 .sub a { font-family: var(--mono); font-size: 14px; }
 
 h2.sec {
-  font-family: var(--mono); font-size: 14px; font-weight: 600;
+  font-family: var(--mono); font-size: 16px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted);
   margin: 26px 0 10px;
 }
@@ -360,6 +360,7 @@ tr:first-child td { border-top: none; }
 tbody tr { transition: background 0.12s; }
 tbody tr:hover { background: var(--panel2); }
 td .num, td.num { font-family: var(--mono); }
+td.stance { white-space: nowrap; }
 td.hi { color: var(--bull); }
 td.med { color: var(--amber); }
 td.low { color: var(--muted); }
@@ -434,7 +435,7 @@ button.primary:disabled { opacity: 0.45; cursor: default; transform: none; }
   transition: border-color 0.15s;
 }
 .panel:hover { border-color: var(--line-bright); }
-.panel h2 { font-size: 15.5px; margin-bottom: 6px; }
+.panel h2 { font-size: 18px; margin-bottom: 6px; }
 .panel p { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
 .status { font-family: var(--mono); font-size: 12.5px; margin-left: 10px; }
 
