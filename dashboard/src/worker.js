@@ -119,9 +119,13 @@ async function ingestCramerVerdicts(request, env) {
 
 async function ingestStocktwits(request, env) {
   const body = await request.json();
-  if (!body.fetched_at || !Array.isArray(body.symbols)) {
-    return json({ error: "fetched_at and symbols[] required" }, 400);
+  if (!Array.isArray(body.symbols)) {
+    return json({ error: "symbols[] required" }, 400);
   }
+  // Server clock is authoritative: the routine's model-written fetched_at
+  // has drifted hours off (bad timezone arithmetic), which corrupts both
+  // the strip's "updated" label and the engine's freshness check.
+  body.fetched_at = new Date().toISOString();
   await env.DB.prepare(
     `INSERT OR REPLACE INTO stocktwits_snapshot (id, fetched_at, payload) VALUES (1, ?, ?)`
   ).bind(body.fetched_at, JSON.stringify(body)).run();

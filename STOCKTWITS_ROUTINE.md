@@ -19,7 +19,6 @@ to the old public-endpoint scraping, exactly as before.
 
 ```json
 {
-  "fetched_at": "2026-08-09T15:30:00Z",
   "symbols": [
     {
       "symbol": "TSEM",
@@ -42,7 +41,8 @@ to the old public-endpoint scraping, exactly as before.
 
 Only `symbol` is required; the engine renders whatever fields are present.
 `driver` feeds the scoring prompt verbatim — keep it factual, one sentence,
-no advice.
+no advice. `fetched_at` is stamped server-side at ingest (model-written
+timestamps drifted hours off); a fetched_at in the POST body is ignored.
 
 ## Routine prompt
 
