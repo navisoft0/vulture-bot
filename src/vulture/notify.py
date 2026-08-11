@@ -88,6 +88,16 @@ def post_play(record) -> bool:
     tag_id, color, emoji = _style(record.composite)
 
     fields = []
+    snap = getattr(record, "post_snapshot", None) or {}
+    price = snap.get("price")
+    if price:
+        move = (f" ({snap['day_change_pct']:+.1f}% today)"
+                if snap.get("day_change_pct") is not None else "")
+        fields.append({
+            "name": "Price at Posting",
+            "value": f"${price:,.2f}{move} · 15-min delayed",
+            "inline": False,
+        })
     if ts.plays_discussed:
         fields.append({
             "name": "The Plays",
@@ -126,7 +136,8 @@ def post_play(record) -> bool:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "footer": {"text": "Vulture · not financial advice · prev-session data"},
     }
-    thread_name = f"{ts.ticker} | {record.composite:.1f} | {emoji}"
+    thread_name = (f"{ts.ticker} ${price:,.2f} | {record.composite:.1f} | {emoji}"
+                   if price else f"{ts.ticker} | {record.composite:.1f} | {emoji}")
     return send_embed(
         config.get("DISCORD_WEBHOOK_FORUM"), embed,
         thread_name=thread_name, applied_tags=[tag_id] if tag_id else [],

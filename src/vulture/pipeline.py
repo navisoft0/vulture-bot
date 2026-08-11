@@ -37,6 +37,10 @@ class ScoredCandidate:
     momentum_line: str | None = None
     radar: bool = False
     posted: bool = False
+    #: Intraday snapshot fetched right before the Discord post (15-min
+    #: delayed) — batch scoring can put half an hour between enrichment and
+    #: posting, so the phase-1 snapshot is not "price as of posting".
+    post_snapshot: dict | None = None
 
     @property
     def title(self) -> str:
@@ -297,6 +301,7 @@ def run_scan(trigger: str = "cron") -> None:
                      config.REPOST_COOLDOWN_H, config.REPOST_MARGIN)
             continue
         cand.radar = radar
+        cand.post_snapshot = market.snapshot(cand.score.ticker)
         cand.posted = notify.post_play(cand)
         log.info("Posted %s (%.2f)%s to Discord: %s", cand.score.ticker,
                  cand.composite, " [radar]" if radar else "", cand.posted)
